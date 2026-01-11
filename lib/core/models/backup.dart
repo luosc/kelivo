@@ -12,6 +12,7 @@ class WebDavConfig {
   final String path;
   final bool includeChats; // Hive boxes
   final bool includeFiles; // uploads/
+  final String prefix;
 
   const WebDavConfig({
     this.url = '',
@@ -20,6 +21,7 @@ class WebDavConfig {
     this.path = 'kelivo_backups',
     this.includeChats = true,
     this.includeFiles = true,
+    this.prefix = 'kelivo',
   });
 
   WebDavConfig copyWith({
@@ -29,6 +31,7 @@ class WebDavConfig {
     String? path,
     bool? includeChats,
     bool? includeFiles,
+    String? prefix,
   }) {
     return WebDavConfig(
       url: url ?? this.url,
@@ -37,6 +40,7 @@ class WebDavConfig {
       path: path ?? this.path,
       includeChats: includeChats ?? this.includeChats,
       includeFiles: includeFiles ?? this.includeFiles,
+      prefix: prefix ?? this.prefix,
     );
   }
 
@@ -47,6 +51,7 @@ class WebDavConfig {
         'path': path,
         'includeChats': includeChats,
         'includeFiles': includeFiles,
+        'prefix': prefix,
       };
 
   static WebDavConfig fromJson(Map<String, dynamic> json) {
@@ -59,6 +64,7 @@ class WebDavConfig {
           : 'kelivo_backups',
       includeChats: json['includeChats'] as bool? ?? true,
       includeFiles: json['includeFiles'] as bool? ?? true,
+      prefix: (json['prefix'] as String?)?.trim() ?? 'kelivo',
     );
   }
 

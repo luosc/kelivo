@@ -378,6 +378,7 @@
   "backupPageUsername": "用户名",
   "backupPagePassword": "密码",
   "backupPagePath": "路径",
+  "backupPagePrefix": "备份文件前缀",
   "backupPageChatsLabel": "聊天记录",
   "backupPageFilesLabel": "文件",
   "backupPageTestDone": "测试完成",
