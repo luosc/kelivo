@@ -1160,6 +1160,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get backupPagePath => '路径';
 
   @override
+  String get backupPagePrefix => '备份文件前缀';
+
+  @override
   String get backupPageChatsLabel => '聊天记录';
 
   @override

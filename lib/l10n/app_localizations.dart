@@ -2321,6 +2321,12 @@ abstract class AppLocalizations {
   /// **'Path'**
   String get backupPagePath;
 
+  /// No description provided for @backupPagePrefix.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup Prefix'**
+  String get backupPagePrefix;
+
   /// No description provided for @backupPageChatsLabel.
   ///
   /// In en, this message translates to:
