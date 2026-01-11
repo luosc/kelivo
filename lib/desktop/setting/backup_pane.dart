@@ -31,6 +31,7 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
   late TextEditingController _username;
   late TextEditingController _password;
   late TextEditingController _path;
+  late TextEditingController _prefix;
   bool _includeChats = true;
   bool _includeFiles = true;
 
@@ -42,6 +43,7 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
     _username = TextEditingController(text: cfg.username);
     _password = TextEditingController(text: cfg.password);
     _path = TextEditingController(text: cfg.path);
+    _prefix = TextEditingController(text: cfg.prefix);
     _includeChats = cfg.includeChats;
     _includeFiles = cfg.includeFiles;
     // Prefetch remote list with saved config
@@ -54,6 +56,7 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
     _username.dispose();
     _password.dispose();
     _path.dispose();
+    _prefix.dispose();
     super.dispose();
   }
 
@@ -75,6 +78,7 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
       username: _username.text.trim(),
       password: _password.text,
       path: _path.text.trim().isEmpty ? 'kelivo_backups' : _path.text.trim(),
+      prefix: _prefix.text.trim().isEmpty ? 'kelivo' : _prefix.text.trim(),
       includeChats: _includeChats,
       includeFiles: _includeFiles,
     );
@@ -86,12 +90,13 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
     context.read<BackupProvider>().updateConfig(cfg);
   }
 
-  Future<void> _applyPartial({String? url, String? username, String? password, String? path, bool? includeChats, bool? includeFiles}) async {
+  Future<void> _applyPartial({String? url, String? username, String? password, String? path, String? prefix, bool? includeChats, bool? includeFiles}) async {
     final cfg = WebDavConfig(
       url: url ?? _url.text.trim(),
       username: username ?? _username.text.trim(),
       password: password ?? _password.text,
       path: path ?? (_path.text.trim().isEmpty ? 'kelivo_backups' : _path.text.trim()),
+      prefix: prefix ?? (_prefix.text.trim().isEmpty ? 'kelivo' : _prefix.text.trim()),
       includeChats: includeChats ?? _includeChats,
       includeFiles: includeFiles ?? _includeFiles,
     );
@@ -230,6 +235,20 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                         style: const TextStyle(fontSize: 14),
                         decoration: _deskInputDecoration(context).copyWith(hintText: 'kelivo_backups'),
                         onChanged: (v) => _applyPartial(path: v),
+                      ),
+                    ),
+                  ),
+                  _rowDivider(context),
+                  _ItemRow(
+                    label: l10n.backupPagePrefix,
+                    trailing: SizedBox(
+                      width: 420,
+                      child: TextField(
+                        controller: _prefix,
+                        enabled: !busy,
+                        style: const TextStyle(fontSize: 14),
+                        decoration: _deskInputDecoration(context).copyWith(hintText: 'kelivo'),
+                        onChanged: (v) => _applyPartial(prefix: v),
                       ),
                     ),
                   ),
