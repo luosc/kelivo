@@ -511,6 +511,7 @@
   "backupPageUsername": "Username",
   "backupPagePassword": "Password",
   "backupPagePath": "Path",
+  "backupPagePrefix": "Backup Prefix",
   "backupPageChatsLabel": "Chats",
   "backupPageFilesLabel": "Files",
   "backupPageTestDone": "Test done",
