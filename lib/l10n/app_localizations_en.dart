@@ -1514,6 +1514,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get backupPagePath => 'Path';
 
   @override
+  String get backupPagePrefix => 'Backup Prefix';
+
+  @override
   String get backupPageChatsLabel => 'Chats';
 
   @override

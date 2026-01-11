@@ -1464,6 +1464,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get backupPagePath => '路径';
 
   @override
+  String get backupPagePrefix => '备份文件前缀';
+
+  @override
   String get backupPageChatsLabel => '聊天记录';
 
   @override
@@ -6782,6 +6785,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get backupPagePath => '路径';
 
   @override
+  String get backupPagePrefix => '备份文件前缀';
+
+  @override
   String get backupPageChatsLabel => '聊天记录';
 
   @override
@@ -12098,6 +12104,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get backupPagePath => '路徑';
+
+  @override
+  String get backupPagePrefix => '備份檔案前綴';
 
   @override
   String get backupPageChatsLabel => '聊天記錄';

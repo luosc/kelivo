@@ -2431,6 +2431,7 @@ class _WebDavSettingsPageState extends State<_WebDavSettingsPage> {
   late final TextEditingController _userCtrl;
   late final TextEditingController _passCtrl;
   late final TextEditingController _pathCtrl;
+  late final TextEditingController _prefixCtrl;
   late final TextEditingController _userAgentCtrl;
   bool _showPassword = false;
 
@@ -2443,6 +2444,9 @@ class _WebDavSettingsPageState extends State<_WebDavSettingsPage> {
     _pathCtrl = TextEditingController(
       text: widget.cfg.path.isEmpty ? 'kelivo_backups' : widget.cfg.path,
     );
+    _prefixCtrl = TextEditingController(
+      text: widget.cfg.prefix.isEmpty ? 'kelivo' : widget.cfg.prefix,
+    );
     _userAgentCtrl = TextEditingController(text: widget.cfg.userAgent);
   }
 
@@ -2452,6 +2456,7 @@ class _WebDavSettingsPageState extends State<_WebDavSettingsPage> {
     _userCtrl.dispose();
     _passCtrl.dispose();
     _pathCtrl.dispose();
+    _prefixCtrl.dispose();
     _userAgentCtrl.dispose();
     super.dispose();
   }
@@ -2530,6 +2535,12 @@ class _WebDavSettingsPageState extends State<_WebDavSettingsPage> {
                             ),
                             const SizedBox(height: 12),
                             _InputRow(
+                              label: l10n.backupPagePrefix,
+                              controller: _prefixCtrl,
+                              hint: 'kelivo',
+                            ),
+                            const SizedBox(height: 12),
+                            _InputRow(
                               label: l10n.backupPageUserAgent,
                               controller: _userAgentCtrl,
                               hint: l10n.backupPageUserAgentHint,
@@ -2566,6 +2577,9 @@ class _WebDavSettingsPageState extends State<_WebDavSettingsPage> {
       path: _pathCtrl.text.trim().isEmpty
           ? 'kelivo_backups'
           : _pathCtrl.text.trim(),
+      prefix: _prefixCtrl.text.trim().isEmpty
+          ? 'kelivo'
+          : _prefixCtrl.text.trim(),
       userAgent: _userAgentCtrl.text.trim(),
     );
     await widget.settings.setWebDavConfig(newCfg);

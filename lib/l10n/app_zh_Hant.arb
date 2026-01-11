@@ -498,6 +498,7 @@
   "backupPageUsername": "使用者名稱",
   "backupPagePassword": "密碼",
   "backupPagePath": "路徑",
+  "backupPagePrefix": "備份檔案前綴",
   "backupPageChatsLabel": "聊天記錄",
   "backupPageFilesLabel": "檔案",
   "backupPageTestDone": "測試完成",

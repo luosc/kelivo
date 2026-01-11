@@ -135,10 +135,12 @@ class DataSync {
     final tmp = await _ensureTempDir();
     await _cleanupPreviousBackupTempFiles(tmp);
     final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final workDir = Directory(p.join(tmp.path, 'kelivo_backup_$timestamp'));
+    final prefix = cfg.prefix.trim().isEmpty ? 'kelivo' : cfg.prefix.trim();
+    final fileBaseName = '${prefix}_backup_$timestamp';
+    final workDir = Directory(p.join(tmp.path, fileBaseName));
     await workDir.create(recursive: true);
 
-    final outPath = p.join(workDir.path, 'kelivo_backup_$timestamp.zip');
+    final outPath = p.join(workDir.path, '$fileBaseName.zip');
     final outFile = File(outPath);
     if (await outFile.exists()) await outFile.delete();
 
@@ -228,10 +230,10 @@ class DataSync {
       if (!await tmp.exists()) return;
       await for (final ent in tmp.list(followLinks: false)) {
         final name = p.basename(ent.path);
-        if (ent is Directory && name.startsWith('kelivo_backup_')) {
+        if (ent is Directory && name.contains('_backup_')) {
           await _deleteDirectoryQuietly(ent);
         } else if (ent is File &&
-            ((name.startsWith('kelivo_backup_') && name.endsWith('.zip')) ||
+            ((name.contains('_backup_') && name.endsWith('.zip')) ||
                 name == '_bk_settings.json' ||
                 name == '_bk_chats.json')) {
           await _deleteFileQuietly(ent);
@@ -463,10 +465,10 @@ class DataSync {
           ? disp.first.trim()
           : Uri.parse(href).pathSegments.last;
 
-      // If mtime is null, try to extract from filename (format: kelivo_backup_2025-01-19T12-34-56.123456.zip)
+      // If mtime is null, try to extract from filename (format: <prefix>_backup_2025-01-19T12-34-56.123456.zip)
       if (mtime == null) {
         final match = RegExp(
-          r'kelivo_backup_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+)\.zip',
+          r'.*_backup_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+)\.zip',
         ).firstMatch(name);
         if (match != null) {
           try {

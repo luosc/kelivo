@@ -59,6 +59,7 @@ class WebDavConfig {
   final String userAgent;
   final bool includeChats; // Hive boxes
   final bool includeFiles; // uploads/
+  final String prefix;
 
   const WebDavConfig({
     this.url = '',
@@ -68,6 +69,7 @@ class WebDavConfig {
     this.userAgent = '',
     this.includeChats = true,
     this.includeFiles = true,
+    this.prefix = 'kelivo',
   });
 
   WebDavConfig copyWith({
@@ -78,6 +80,7 @@ class WebDavConfig {
     String? userAgent,
     bool? includeChats,
     bool? includeFiles,
+    String? prefix,
   }) {
     return WebDavConfig(
       url: url ?? this.url,
@@ -87,6 +90,7 @@ class WebDavConfig {
       userAgent: userAgent ?? this.userAgent,
       includeChats: includeChats ?? this.includeChats,
       includeFiles: includeFiles ?? this.includeFiles,
+      prefix: prefix ?? this.prefix,
     );
   }
 
@@ -98,6 +102,7 @@ class WebDavConfig {
     'userAgent': userAgent,
     'includeChats': includeChats,
     'includeFiles': includeFiles,
+    'prefix': prefix,
   };
 
   static WebDavConfig fromJson(Map<String, dynamic> json) {
@@ -111,6 +116,9 @@ class WebDavConfig {
       userAgent: (json['userAgent'] as String?) ?? '',
       includeChats: json['includeChats'] as bool? ?? true,
       includeFiles: json['includeFiles'] as bool? ?? true,
+      prefix: (json['prefix'] as String?)?.trim().isNotEmpty == true
+          ? (json['prefix'] as String).trim()
+          : 'kelivo',
     );
   }
 
