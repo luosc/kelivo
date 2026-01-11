@@ -2,7 +2,7 @@ import 'dart:convert';
 
 enum RestoreMode {
   overwrite, // 完全覆盖：清空本地后恢复
-  merge, // 增量合并：智能去重
+  merge,     // 增量合并：智能去重
 }
 
 enum RestoreAction {
@@ -58,6 +58,7 @@ class WebDavConfig {
   final String path;
   final bool includeChats; // Hive boxes
   final bool includeFiles; // uploads/
+  final String prefix;
 
   const WebDavConfig({
     this.url = '',
@@ -66,6 +67,7 @@ class WebDavConfig {
     this.path = 'kelivo_backups',
     this.includeChats = true,
     this.includeFiles = true,
+    this.prefix = 'kelivo',
   });
 
   WebDavConfig copyWith({
@@ -75,6 +77,7 @@ class WebDavConfig {
     String? path,
     bool? includeChats,
     bool? includeFiles,
+    String? prefix,
   }) {
     return WebDavConfig(
       url: url ?? this.url,
@@ -83,17 +86,19 @@ class WebDavConfig {
       path: path ?? this.path,
       includeChats: includeChats ?? this.includeChats,
       includeFiles: includeFiles ?? this.includeFiles,
+      prefix: prefix ?? this.prefix,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'url': url,
-    'username': username,
-    'password': password,
-    'path': path,
-    'includeChats': includeChats,
-    'includeFiles': includeFiles,
-  };
+        'url': url,
+        'username': username,
+        'password': password,
+        'path': path,
+        'includeChats': includeChats,
+        'includeFiles': includeFiles,
+        'prefix': prefix,
+      };
 
   static WebDavConfig fromJson(Map<String, dynamic> json) {
     return WebDavConfig(
@@ -105,6 +110,7 @@ class WebDavConfig {
           : 'kelivo_backups',
       includeChats: json['includeChats'] as bool? ?? true,
       includeFiles: json['includeFiles'] as bool? ?? true,
+      prefix: (json['prefix'] as String?)?.trim() ?? 'kelivo',
     );
   }
 
@@ -121,17 +127,14 @@ class WebDavConfig {
 }
 
 class S3Config {
-  final String
-  endpoint; // e.g. https://s3.amazonaws.com or https://<accountid>.r2.cloudflarestorage.com
-  final String
-  region; // e.g. us-east-1 / auto (for some S3-compatible providers)
+  final String endpoint; // e.g. https://s3.amazonaws.com or https://<accountid>.r2.cloudflarestorage.com
+  final String region; // e.g. us-east-1 / auto (for some S3-compatible providers)
   final String bucket;
   final String accessKeyId;
   final String secretAccessKey;
   final String sessionToken; // optional
   final String prefix; // object key prefix/folder
-  final bool
-  pathStyle; // safer for custom endpoints (no bucket subdomain TLS mismatch)
+  final bool pathStyle; // safer for custom endpoints (no bucket subdomain TLS mismatch)
   final bool includeChats;
   final bool includeFiles;
 
@@ -175,17 +178,17 @@ class S3Config {
   }
 
   Map<String, dynamic> toJson() => {
-    'endpoint': endpoint,
-    'region': region,
-    'bucket': bucket,
-    'accessKeyId': accessKeyId,
-    'secretAccessKey': secretAccessKey,
-    'sessionToken': sessionToken,
-    'prefix': prefix,
-    'pathStyle': pathStyle,
-    'includeChats': includeChats,
-    'includeFiles': includeFiles,
-  };
+        'endpoint': endpoint,
+        'region': region,
+        'bucket': bucket,
+        'accessKeyId': accessKeyId,
+        'secretAccessKey': secretAccessKey,
+        'sessionToken': sessionToken,
+        'prefix': prefix,
+        'pathStyle': pathStyle,
+        'includeChats': includeChats,
+        'includeFiles': includeFiles,
+      };
 
   static S3Config fromJson(Map<String, dynamic> json) {
     return S3Config(
