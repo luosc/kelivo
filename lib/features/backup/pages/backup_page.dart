@@ -2510,6 +2510,7 @@ class _WebDavSettingsSheetState extends State<_WebDavSettingsSheet> {
   late final TextEditingController _userCtrl;
   late final TextEditingController _passCtrl;
   late final TextEditingController _pathCtrl;
+  late final TextEditingController _prefixCtrl;
   bool _showPassword = false;
 
   @override
@@ -2521,6 +2522,7 @@ class _WebDavSettingsSheetState extends State<_WebDavSettingsSheet> {
     _pathCtrl = TextEditingController(
       text: widget.cfg.path.isEmpty ? 'kelivo_backups' : widget.cfg.path,
     );
+    _prefixCtrl = TextEditingController(text: widget.cfg.prefix);
   }
 
   @override
@@ -2529,6 +2531,7 @@ class _WebDavSettingsSheetState extends State<_WebDavSettingsSheet> {
     _userCtrl.dispose();
     _passCtrl.dispose();
     _pathCtrl.dispose();
+    _prefixCtrl.dispose();
     super.dispose();
   }
 
@@ -2594,6 +2597,9 @@ class _WebDavSettingsSheetState extends State<_WebDavSettingsSheet> {
                         path: _pathCtrl.text.trim().isEmpty
                             ? 'kelivo_backups'
                             : _pathCtrl.text.trim(),
+                        prefix: _prefixCtrl.text.trim().isEmpty
+                            ? 'kelivo' 
+                            : _prefixCtrl.text.trim(),
                       );
                       await widget.settings.setWebDavConfig(newCfg);
                       widget.vm.updateConfig(newCfg);
@@ -2630,6 +2636,12 @@ class _WebDavSettingsSheetState extends State<_WebDavSettingsSheet> {
                 label: l10n.backupPagePath,
                 controller: _pathCtrl,
                 hint: 'kelivo_backups',
+              ),
+              const SizedBox(height: 12),
+              _InputRow(
+                label: l10n.backupPagePrefix,
+                controller: _prefixCtrl,
+                hint: 'kelivo',
               ),
               const SizedBox(height: 16),
             ],

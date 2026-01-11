@@ -106,7 +106,8 @@ class DataSync {
   Future<File> prepareBackupFile(WebDavConfig cfg) async {
     final tmp = await _ensureTempDir();
     final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final outFile = File(p.join(tmp.path, 'kelivo_backup_$timestamp.zip'));
+    final prefix = cfg.prefix.trim().isEmpty ? 'kelivo' : cfg.prefix.trim();
+    final outFile = File(p.join(tmp.path, '${prefix}_backup_$timestamp.zip'));
     if (await outFile.exists()) await outFile.delete();
 
     // Use Archive instead of ZipFileEncoder for better control
@@ -246,9 +247,10 @@ class DataSync {
           ? disp.first.trim()
           : Uri.parse(href).pathSegments.last;
       
-      // If mtime is null, try to extract from filename (format: kelivo_backup_2025-01-19T12-34-56.123456.zip)
+      // If mtime is null, try to extract from filename (format: {prefix}_backup_2025-01-19T12-34-56.123456.zip)
       if (mtime == null) {
-        final match = RegExp(r'kelivo_backup_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+)\.zip').firstMatch(name);
+        // Try to match standard format: (anything)_backup_(timestamp).zip
+        final match = RegExp(r'(?:.*)_backup_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+)\.zip').firstMatch(name);
         if (match != null) {
           try {
             // Replace hyphens in time part back to colons
