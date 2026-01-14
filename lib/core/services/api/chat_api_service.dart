@@ -4713,6 +4713,11 @@ class ChatApiService {
     bool _receivedImage = false;
     final off = _isOff(thinkingBudget);
 
+    // Gemini 2.5 Flash Image / 3 Pro Image Preview
+    final isGemini25FlashImage = modelId.contains(RegExp(r'gemini-2\.5-flash-image', caseSensitive: false));
+    final isGemini3ProImage = modelId.contains(RegExp(r'gemini-3-pro-image(-preview)?', caseSensitive: false));
+    final isImageGenerationModel = isGemini25FlashImage || isGemini3ProImage;
+
     // Map OpenAI-style tools to Gemini functionDeclarations (MCP)
     List<Map<String, dynamic>>? geminiTools;
     if (tools != null && tools.isNotEmpty) {
@@ -4785,11 +4790,15 @@ class ChatApiService {
         if (topP != null) 'topP': topP,
         if (maxTokens != null) 'maxOutputTokens': maxTokens,
         // Enable IMAGE+TEXT output modalities when model is configured to output images
-        if (wantsImageOutput) 'responseModalities': ['TEXT', 'IMAGE'],
+        if (wantsImageOutput && !isImageGenerationModel) 'responseModalities': ['TEXT', 'IMAGE'],
+        if (isImageGenerationModel)
+          'imageConfig': {
+            'aspectRatio': '16:9',
+            if (isGemini3ProImage) 'imageSize': '2K',
+          },
         if (isReasoning)
           'thinkingConfig': () {
             // Match gemini-3-pro or gemini-3-pro-preview (and similar variants)
-            final isGemini3ProImage = modelId.contains(RegExp(r'gemini-3-pro-image(-preview)?', caseSensitive: false));
             final isGemini3Pro = modelId.contains(RegExp(r'gemini-3-pro(-preview)?', caseSensitive: false));
             final isGemini3Flash = modelId.contains(RegExp(r'gemini-3-flash(-preview)?', caseSensitive: false));
             if (isGemini3ProImage) {
