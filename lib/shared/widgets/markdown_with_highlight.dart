@@ -1396,6 +1396,7 @@ class _CollapsibleCodeBlockState extends State<_CollapsibleCodeBlock> {
                       final l10n = AppLocalizations.of(context)!;
                       final code = widget.code;
                       final end = _trimTrailingNewlinesEndIndex(code);
+                      final collapseLines = settings.autoCollapseCodeBlockLines;
 
                       final preview = <String>[];
                       int totalLines = 0;
@@ -1405,7 +1406,8 @@ class _CollapsibleCodeBlockState extends State<_CollapsibleCodeBlock> {
                         for (int i = 0; i < end; i++) {
                           final cu = code.codeUnitAt(i);
                           if (cu == 0x0A /* \n */ || cu == 0x0D /* \r */) {
-                            if (preview.length < 2) {
+                            // Collect lines up to the user-configured limit
+                            if (preview.length < collapseLines) {
                               preview.add(code.substring(lineStart, i));
                             }
                             totalLines++;
@@ -1417,7 +1419,8 @@ class _CollapsibleCodeBlockState extends State<_CollapsibleCodeBlock> {
                             lineStart = i + 1;
                           }
                         }
-                        if (preview.length < 2) {
+                        // Add the last line if within limit
+                        if (preview.length < collapseLines) {
                           preview.add(code.substring(lineStart, end));
                         }
                       }
@@ -2679,3 +2682,4 @@ class SelectableHighlightView extends StatelessWidget {
     );
   }
 }
+
