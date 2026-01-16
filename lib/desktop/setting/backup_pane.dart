@@ -112,6 +112,7 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
     );
     if (options == null) return;
     await action(options);
+    if (!mounted) return;
     // Inform restart requirement
     await showDialog(
       context: context,
@@ -551,6 +552,7 @@ class _RemoteBackupsDialogState extends State<_RemoteBackupsDialog> {
     final options = await showDialog<RestoreOptions>(context: context, builder: (_) => const _RestoreOptionsDialog());
     if (options == null) return;
     await action(options);
+    if (!mounted) return;
     final l10n = AppLocalizations.of(context)!;
     final cs = Theme.of(context).colorScheme;
     await showDialog(context: context, builder: (_) => AlertDialog(
