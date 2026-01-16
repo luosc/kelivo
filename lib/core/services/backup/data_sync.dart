@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:archive/archive_io.dart';
 import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
@@ -15,6 +16,7 @@ import '../../models/chat_message.dart';
 import '../../models/conversation.dart';
 import '../chat/chat_service.dart';
 import '../../../utils/app_directories.dart';
+import '../../../utils/sandbox_path_resolver.dart';
 
 class DataSync {
   final ChatService chatService;
@@ -270,6 +272,7 @@ class DataSync {
   }
 
   Future<void> restoreFromWebDav(WebDavConfig cfg, BackupFileItem item, {RestoreOptions? options, RestoreMode mode = RestoreMode.overwrite}) async {
+    await SandboxPathResolver.init();
     // Backward compatibility: if options is null, construct from legacy mode
     final opts = options ?? RestoreOptions.fromMode(mode);
 
@@ -297,6 +300,7 @@ class DataSync {
 
   Future<void> restoreFromLocalFile(File file, WebDavConfig cfg, {RestoreOptions? options, RestoreMode mode = RestoreMode.overwrite}) async {
     if (!await file.exists()) throw Exception('备份文件不存在');
+    await SandboxPathResolver.init();
     // Backward compatibility
     final opts = options ?? RestoreOptions.fromMode(mode);
     await _restoreFromBackupFile(file, cfg, opts);
@@ -344,14 +348,84 @@ class DataSync {
     if (!chatService.initialized) {
       await chatService.init();
     }
+    
+    // Prepare directory info for relativizing paths
+    final uploadDir = await _getUploadDir();
+    final imagesDir = await _getImagesDir();
+    final avatarsDir = await _getAvatarsDir();
+    
+    // Helper to make path relative if inside app dirs
+    // We use aggressive matching because on some platforms (iOS/macOS),
+    // the stored path might be a resolved symlink (/private/var/...) while
+    // the directory path is different (/var/...), causing startsWith to fail.
+    String makeRelative(String absolutePath) {
+      if (absolutePath.isEmpty) return absolutePath;
+      try {
+        // 1. Try robust startsWith (handling potential symlinks prefixes if feasible, but tricky)
+        // 2. Aggressive fallback: Check if path contains known structure
+        // This is safe because we only care about files *we* manage in these subfolders.
+        if (absolutePath.contains('/Documents/upload/')) {
+           final idx = absolutePath.indexOf('/Documents/upload/');
+           return absolutePath.substring(idx + '/Documents/'.length); // "upload/..."
+        }
+        if (absolutePath.contains('/Documents/images/')) {
+           final idx = absolutePath.indexOf('/Documents/images/');
+           return absolutePath.substring(idx + '/Documents/'.length); // "images/..."
+        }
+        if (absolutePath.contains('/Documents/avatars/')) {
+           final idx = absolutePath.indexOf('/Documents/avatars/');
+           return absolutePath.substring(idx + '/Documents/'.length); // "avatars/..."
+        }
+        
+        // Also check standard startsWith logic for non-iOS platforms or matches without /Documents/
+        if (absolutePath.startsWith(uploadDir.path)) {
+          return p.join('upload', p.relative(absolutePath, from: uploadDir.path));
+        } else if (absolutePath.startsWith(imagesDir.path)) {
+          return p.join('images', p.relative(absolutePath, from: imagesDir.path));
+        } else if (absolutePath.startsWith(avatarsDir.path)) {
+          return p.join('avatars', p.relative(absolutePath, from: avatarsDir.path));
+        }
+      } catch (_) {}
+      return absolutePath; // Keep absolute if outside known dirs
+    }
+
     final conversations = chatService.getAllConversations();
     final allMsgs = <ChatMessage>[];
     final toolEvents = <String, List<Map<String, dynamic>>>{};
     final geminiThoughtSigs = <String, String>{};
+    
+    final imgRe = RegExp(r"\[image:(.+?)\]");
+    final fileRe = RegExp(r"\[file:(.+?)\|(.+?)\|(.+?)\]");
+
     for (final c in conversations) {
       final msgs = chatService.getMessages(c.id);
-      allMsgs.addAll(msgs);
+      
+      // Process messages to relativize paths
       for (final m in msgs) {
+        var mToAdd = m;
+        // Check for content paths
+        String updated = m.content;
+        updated = updated.replaceAllMapped(imgRe, (match) {
+          final raw = (match.group(1) ?? '').trim();
+          final rel = makeRelative(raw);
+          // Ensure we store portable paths with forward slashes
+          final portable = rel.replaceAll('\\', '/');
+          return '[image:$portable]';
+        });
+        updated = updated.replaceAllMapped(fileRe, (match) {
+          final raw = (match.group(1) ?? '').trim();
+          final name = (match.group(2) ?? '').trim();
+          final mime = (match.group(3) ?? '').trim();
+          final rel = makeRelative(raw);
+          final portable = rel.replaceAll('\\', '/');
+          return '[file:$portable|$name|$mime]';
+        });
+        
+        if (updated != m.content) {
+          mToAdd = m.copyWith(content: updated);
+        }
+        allMsgs.add(mToAdd);
+
         if (m.role == 'assistant') {
           final ev = chatService.getToolEvents(m.id);
           if (ev.isNotEmpty) toolEvents[m.id] = ev;
@@ -360,6 +434,7 @@ class DataSync {
         }
       }
     }
+    
     final obj = {
       'version': 1,
       'conversations': conversations.map((c) => c.toJson()).toList(),
@@ -446,36 +521,12 @@ class DataSync {
       } catch (_) {}
     }
 
-    // 2. Chats Restoration
-    if (options.chatsAction != RestoreAction.ignore) {
-      final chatsFile = File(p.join(extractDir.path, 'chats.json'));
-      if (cfg.includeChats && await chatsFile.exists()) {
-        try {
-          final obj = jsonDecode(await chatsFile.readAsString()) as Map<String, dynamic>;
-          // Parse data
-          final convs = (obj['conversations'] as List?)
-                  ?.map((e) => Conversation.fromJson((e as Map).cast<String, dynamic>()))
-                  .toList() ?? const [];
-          final msgs = (obj['messages'] as List?)
-                  ?.map((e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>()))
-                  .toList() ?? const [];
-          final toolEvents = ((obj['toolEvents'] as Map?) ?? const <String, dynamic>{})
-              .map((k, v) => MapEntry(k.toString(), (v as List).cast<Map>().map((e) => e.cast<String, dynamic>()).toList()));
-          final geminiThoughtSigs = ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{})
-              .map((k, v) => MapEntry(k.toString(), v.toString()));
-
-          if (options.chatsAction == RestoreAction.overwrite) {
-             await chatService.clearAllData();
-             await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: true);
-          } else {
-             // Merge
-             await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: false);
-          }
-        } catch (_) {}
-      }
+    // 2. Prepare Data (Clear first if overwrite is requested)
+    if (options.chatsAction == RestoreAction.overwrite) {
+       await chatService.clearAllData();
     }
 
-    // 3. Files Restoration
+    // 3. Files Restoration (First restore files so paths exist)
     if (options.filesAction != RestoreAction.ignore && cfg.includeFiles) {
       final isOverwrite = options.filesAction == RestoreAction.overwrite;
       
@@ -499,6 +550,105 @@ class DataSync {
         await _getAvatarsDir(),
         overwrite: isOverwrite
       );
+    }
+
+    // 4. Chats Restoration
+    if (options.chatsAction != RestoreAction.ignore) {
+      final chatsFile = File(p.join(extractDir.path, 'chats.json'));
+      if (cfg.includeChats && await chatsFile.exists()) {
+        try {
+          final obj = jsonDecode(await chatsFile.readAsString()) as Map<String, dynamic>;
+          // Parse data
+          final convs = (obj['conversations'] as List?)
+                  ?.map((e) => Conversation.fromJson((e as Map).cast<String, dynamic>()))
+                  .toList() ?? const [];
+          var msgs = (obj['messages'] as List?)
+                  ?.map((e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>()))
+                  .toList() ?? const [];
+
+          // Prepare path resolution
+          final appDataDir = await AppDirectories.getAppDataDirectory();
+          
+          // Helper to resolve paths
+          String resolvePath(String path) {
+             // 1. Check if relative (portable)
+             // On macOS/Linux, path.startsWith('/') is true for absolute paths.
+             // On Windows, path usually contains ':' (e.g. C:\) or starts with '\\'.
+             // We need to be careful: if the path is ALREADY relative (e.g. "upload/foo.jpg"),
+             // we MUST expand it to absolute for the app to use it.
+             bool isAbsolute = path.startsWith('/') || path.startsWith('\\') || (Platform.isWindows && path.contains(':'));
+             
+             if (!isAbsolute) {
+               // It's a relative path like "images/foo.jpg".
+               // The app expects absolute paths at runtime.
+               // So we expand it: /Users/.../Documents + / + images/foo.jpg
+               return p.join(appDataDir.path, path);
+             }
+             
+             // 2. It's absolute (Legacy) -> Use "Heal" strategy
+             // Force check against new appDataDir if SandboxPathResolver fails (e.g. file check failed)
+             // We manually apply the fix logic here to ensure it points to the new location.
+             final fixed = SandboxPathResolver.fix(path);
+             if (fixed != path) return fixed;
+
+             // Fallback: manually rewrite if it looks like a legacy path but resolver missed it
+             if (path.contains('/Documents/')) {
+               final tail = path.substring(path.indexOf('/Documents/') + '/Documents/'.length);
+               // Check if it belongs to one of our known folders
+               if (tail.startsWith('upload/') || tail.startsWith('images/') || tail.startsWith('avatars/')) {
+                 return p.join(appDataDir.path, tail);
+               }
+             }
+             
+             return path;
+          }
+
+          final imgRe = RegExp(r"\[image:(.+?)\]");
+          final fileRe = RegExp(r"\[file:(.+?)\|(.+?)\|(.+?)\]");
+
+          msgs = msgs.map((m) {
+            String updated = m.content;
+            updated = updated.replaceAllMapped(imgRe, (match) {
+              final raw = (match.group(1) ?? '').trim();
+              final fixed = resolvePath(raw);
+              return '[image:$fixed]';
+            });
+            updated = updated.replaceAllMapped(fileRe, (match) {
+              final raw = (match.group(1) ?? '').trim();
+              final name = (match.group(2) ?? '').trim();
+              final mime = (match.group(3) ?? '').trim();
+              final fixed = resolvePath(raw);
+              return '[file:$fixed|$name|$mime]';
+            });
+            
+            if (updated != m.content) {
+              return m.copyWith(content: updated);
+            }
+            return m;
+          }).toList();
+
+          final toolEvents = ((obj['toolEvents'] as Map?) ?? const <String, dynamic>{})
+              .map((k, v) => MapEntry(k.toString(), (v as List).cast<Map>().map((e) => e.cast<String, dynamic>()).toList()));
+          final geminiThoughtSigs = ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{})
+              .map((k, v) => MapEntry(k.toString(), v.toString()));
+
+          if (options.chatsAction == RestoreAction.overwrite) {
+             // Already cleared data above at step 2.
+             // Pass overwrite: true to handle replacement logic, but ensure helper doesn't clear again?
+             // Actually, _restoreChats helper calls clearAllData() if overwrite is true.
+             // We must change the call to avoid double clear (which would delete files again!).
+             // Since we cleared manually, we can treat this as "merge" (overwrite=false) for the helper,
+             // BUT the helper does more than just clear. It replaces logic.
+             
+             // BETTER: Call helper with overwrite:false, but since we cleared data, it effectively acts as overwrite
+             // (empty DB + new data = new data).
+             await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: false);
+          } else {
+             // Merge
+             await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: false);
+          }
+        } catch (_) {}
+      }
     }
 
     try { await extractDir.delete(recursive: true); } catch (_) {}
@@ -542,26 +692,66 @@ class DataSync {
       } catch (_) {}
     }
 
+    // Legacy mode: Clear data first if overwrite
+    if (mode == RestoreMode.overwrite) {
+      await chatService.clearAllData();
+    }
+
+    // Restore files (First)
+    if (cfg.includeFiles) {
+       final isOverwrite = mode == RestoreMode.overwrite;
+       await _restoreDirectory(Directory(p.join(extractDir.path, 'upload')), await _getUploadDir(), overwrite: isOverwrite);
+       await _restoreDirectory(Directory(p.join(extractDir.path, 'images')), await _getImagesDir(), overwrite: isOverwrite);
+       await _restoreDirectory(Directory(p.join(extractDir.path, 'avatars')), await _getAvatarsDir(), overwrite: isOverwrite);
+    }
+
     // Restore chats
     final chatsFile = File(p.join(extractDir.path, 'chats.json'));
     if (cfg.includeChats && await chatsFile.exists()) {
       try {
         final obj = jsonDecode(await chatsFile.readAsString()) as Map<String, dynamic>;
         final convs = (obj['conversations'] as List?)?.map((e) => Conversation.fromJson((e as Map).cast<String, dynamic>())).toList() ?? const [];
-        final msgs = (obj['messages'] as List?)?.map((e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>())).toList() ?? const [];
+        var msgs = (obj['messages'] as List?)?.map((e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>())).toList() ?? const [];
+        
+        // Prepare path resolution
+        final appDataDir = await AppDirectories.getAppDataDirectory();
+        String resolvePath(String path) {
+           if (!path.startsWith('/') && !path.startsWith('\\') && !path.contains(':')) {
+             return p.join(appDataDir.path, path);
+           }
+           return SandboxPathResolver.fix(path);
+        }
+
+        final imgRe = RegExp(r"\[image:(.+?)\]");
+        final fileRe = RegExp(r"\[file:(.+?)\|(.+?)\|(.+?)\]");
+
+        msgs = msgs.map((m) {
+          String updated = m.content;
+          updated = updated.replaceAllMapped(imgRe, (match) {
+            final raw = (match.group(1) ?? '').trim();
+            final fixed = resolvePath(raw);
+            return '[image:$fixed]';
+          });
+          updated = updated.replaceAllMapped(fileRe, (match) {
+            final raw = (match.group(1) ?? '').trim();
+            final name = (match.group(2) ?? '').trim();
+            final mime = (match.group(3) ?? '').trim();
+            final fixed = resolvePath(raw);
+            return '[file:$fixed|$name|$mime]';
+          });
+          
+          if (updated != m.content) {
+            return m.copyWith(content: updated);
+          }
+          return m;
+        }).toList();
+
         final toolEvents = ((obj['toolEvents'] as Map?) ?? const <String, dynamic>{}).map((k, v) => MapEntry(k.toString(), (v as List).cast<Map>().map((e) => e.cast<String, dynamic>()).toList()));
         final geminiThoughtSigs = ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{}).map((k, v) => MapEntry(k.toString(), v.toString()));
         
-        await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: mode == RestoreMode.overwrite);
+        // Use overwrite: false because we already cleared data manually
+        await _restoreChats(convs, msgs, toolEvents, geminiThoughtSigs, overwrite: false);
       } catch (_) {}
-    }
-
-    // Restore files
-    if (cfg.includeFiles) {
-       final isOverwrite = mode == RestoreMode.overwrite;
-       await _restoreDirectory(Directory(p.join(extractDir.path, 'upload')), await _getUploadDir(), overwrite: isOverwrite);
-       await _restoreDirectory(Directory(p.join(extractDir.path, 'images')), await _getImagesDir(), overwrite: isOverwrite);
-       await _restoreDirectory(Directory(p.join(extractDir.path, 'avatars')), await _getAvatarsDir(), overwrite: isOverwrite);
     }
 
     try { await extractDir.delete(recursive: true); } catch (_) {}
