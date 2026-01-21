@@ -399,6 +399,8 @@
   "backupPageExporting": "正在导出...",
   "backupPageExportToFile": "导出为文件",
   "backupPageExportToFileSubtitle": "导出APP数据为文件",
+  "backupPageExportToFileShareSubtitle": "通过系统分享菜单",
+  "backupPageExportToFileSaveSubtitle": "存储为本地文件",
   "backupPageImportBackupFile": "备份文件导入",
   "backupPageImportBackupFileSubtitle": "导入本地备份文件",
   "backupPageImportFromOtherApps": "从其他APP导入",

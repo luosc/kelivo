@@ -1248,6 +1248,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get backupPageExportToFileSubtitle => 'Export app data to a file';
 
   @override
+  String get backupPageExportToFileShareSubtitle => 'via system share menu';
+
+  @override
+  String get backupPageExportToFileSaveSubtitle => 'Save to local file system';
+
+  @override
   String get backupPageImportBackupFile => 'Import Backup File';
 
   @override

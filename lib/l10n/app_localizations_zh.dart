@@ -1214,6 +1214,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get backupPageExportToFileSubtitle => '导出APP数据为文件';
 
   @override
+  String get backupPageExportToFileShareSubtitle => '通过系统分享菜单';
+
+  @override
+  String get backupPageExportToFileSaveSubtitle => '存储为本地文件';
+
+  @override
   String get backupPageImportBackupFile => '备份文件导入';
 
   @override

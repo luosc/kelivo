@@ -2429,6 +2429,18 @@ abstract class AppLocalizations {
   /// **'Export app data to a file'**
   String get backupPageExportToFileSubtitle;
 
+  /// No description provided for @backupPageExportToFileShareSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'via system share menu'**
+  String get backupPageExportToFileShareSubtitle;
+
+  /// No description provided for @backupPageExportToFileSaveSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save to local file system'**
+  String get backupPageExportToFileSaveSubtitle;
+
   /// No description provided for @backupPageImportBackupFile.
   ///
   /// In en, this message translates to:

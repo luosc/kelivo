@@ -4,10 +4,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter_file_dialog/flutter_file_dialog.dart';
+import '../../backup/widgets/local_export_option_sheet.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../shared/widgets/snackbar.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../icons/lucide_adapter.dart';
@@ -20,6 +23,7 @@ import '../../../core/services/chat/chat_service.dart';
 import '../../../shared/widgets/ios_switch.dart';
 import '../../../core/services/backup/cherry_importer.dart';
 import '../../../core/services/backup/chatbox_importer.dart';
+import '../../../shared/responsive/screen_type_helper.dart';
 
 // File size formatter (B, KB, MB, GB)
 String _fmtBytes(int bytes) {
@@ -682,7 +686,7 @@ class _BackupPageState extends State<BackupPage> {
     final l10n = AppLocalizations.of(context)!;
     final file = await _runWithExportingOverlay(context, () => vm.exportToFile());
     if (!mounted) return;
-    
+
     // iPad: anchor popover to the overlay's center
     Rect rect;
     final overlay = Overlay.of(context);
@@ -694,6 +698,34 @@ class _BackupPageState extends State<BackupPage> {
     } else {
       final size = MediaQuery.of(context).size;
       rect = Rect.fromCenter(center: Offset(size.width / 2, size.height / 2), width: 1, height: 1);
+    }
+
+    if (!mounted) return;
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      // Use custom sheet to choose Share or Save
+      final choice = await showModalBottomSheet<LocalExportAction>(
+        context: context,
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (ctx) => const LocalExportOptionSheet(),
+      );
+
+      if (choice == null) return;
+
+      if (choice == LocalExportAction.save) {
+        if (!mounted) return;
+        try {
+          // Use flutter_file_dialog to save file
+          final params = SaveFileDialogParams(sourceFilePath: file.path);
+          await FlutterFileDialog.saveFile(params: params);
+        } catch (e) {
+          if (!mounted) return;
+          showAppSnackBar(context, message: 'Save failed: $e', type: NotificationType.error);
+        }
+        return;
+      }
+      // If share, fall through to Share.shareXFiles
     }
     
     await Future.delayed(const Duration(milliseconds: 50));
