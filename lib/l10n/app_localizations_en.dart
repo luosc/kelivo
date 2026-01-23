@@ -3825,4 +3825,7 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get assistantEditDeleteSummaryContent =>
       'Are you sure you want to clear this summary?';
+
+  @override
+  String get homePageProcessingFiles => 'Processing files...';
 }
