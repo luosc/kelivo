@@ -1,4 +1,4 @@
-package com.psyche.kelivo
+package com.luosc.kelivo
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
