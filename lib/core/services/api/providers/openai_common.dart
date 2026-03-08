@@ -756,6 +756,7 @@ class _OpenAIProviderInfo {
   bool get isSiliconFlow =>
       providerId.contains('siliconflow') || host.contains('siliconflow');
   bool get isAzureOpenAI => host.contains('openai.azure.com');
+  bool get isOpenAIHost => host.contains('openai.com') && !isAzureOpenAI;
   bool get isOpenRouter => host.contains('openrouter.ai');
   bool get isDeepSeek =>
       host.contains('deepseek') ||
@@ -901,6 +902,13 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
     config,
     upstreamModelId,
   );
+  final bool usePhase =
+      info.isOpenAIHost &&
+      config.useResponseApi == true &&
+      RegExp(
+        r'gpt-5\.4(?:$|[-.])',
+        caseSensitive: false,
+      ).hasMatch(upstreamModelId);
   final bool needsReasoningEcho = info.needsReasoningEcho && isReasoning;
   final bool preserveReasoningDetails =
       info.preserveReasoningDetails && isReasoning;
@@ -1040,9 +1048,15 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
       }
 
       final isAssistant = roleRaw == 'assistant';
+      final hasToolCalls = isAssistant && m['tool_calls'] is List;
+      void applyAssistantPhase(Map<String, dynamic> msg) {
+        if (usePhase) {
+          msg['phase'] = hasToolCalls ? 'commentary' : 'final_answer';
+        }
+      }
 
       // Handle assistant messages with tool_calls - convert to function_call format
-      if (isAssistant && m['tool_calls'] is List) {
+      if (hasToolCalls) {
         final toolCalls = m['tool_calls'] as List;
         for (final tc in toolCalls) {
           if (tc is! Map) continue;
@@ -1093,14 +1107,16 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
         );
         if (!canImageInput) {
           if (isAssistant) {
-            input.add({
+            final msg = {
               'type': 'message',
               'role': 'assistant',
               'status': 'completed',
               'content': [
                 {'type': 'output_text', 'text': parsed.text},
               ],
-            });
+            };
+            applyAssistantPhase(msg);
+            input.add(msg);
           } else {
             input.add({'role': roleRaw, 'content': parsed.text});
           }
@@ -1169,12 +1185,14 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
         }
         // Use proper message object format for assistant messages
         if (isAssistant) {
-          input.add({
+          final msg = {
             'type': 'message',
             'role': 'assistant',
             'status': 'completed',
             'content': parts,
-          });
+          };
+          applyAssistantPhase(msg);
+          input.add(msg);
         } else {
           input.add({'role': roleRaw, 'content': parts});
         }
@@ -1182,14 +1200,16 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
         // No images
         if (isAssistant) {
           // Use proper message object format for assistant messages
-          input.add({
+          final msg = {
             'type': 'message',
             'role': 'assistant',
             'status': 'completed',
             'content': [
               {'type': 'output_text', 'text': raw},
             ],
-          });
+          };
+          applyAssistantPhase(msg);
+          input.add(msg);
         } else {
           input.add({'role': roleRaw, 'content': raw});
         }
@@ -1702,6 +1722,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
       <int, _ResponsesImageGenerationResult>{};
   List<Map<String, dynamic>> lastResponseOutputItems =
       const <Map<String, dynamic>>[];
+  String? lastResponseId;
   String? finishReason;
 
   await for (final chunk in _ensureTrailingNewline(sse)) {
@@ -2328,6 +2349,8 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
               }
             }
           } else if (type == 'response.completed') {
+            final responseId = (json['response']?['id'] ?? '').toString();
+            if (responseId.isNotEmpty) lastResponseId = responseId;
             final u = json['response']?['usage'];
             if (u != null) {
               final inTok = (u['input_tokens'] ?? 0) as int;
@@ -2543,14 +2566,21 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                 );
               }
 
-              // Build follow-up Responses request input
-              List<Map<String, dynamic>> currentInput = <Map<String, dynamic>>[
-                ...responsesInitialInput,
-              ];
-              if (responseOutputItems.isNotEmpty) {
-                currentInput.addAll(responseOutputItems);
+              // Build follow-up Responses request input.
+              // OpenAI can chain the previous response; compatible providers
+              // still need the replayed function_call items in full context.
+              final usePrevResponseId =
+                  info.isOpenAIHost && lastResponseId != null;
+              List<Map<String, dynamic>> currentInput;
+              if (usePrevResponseId) {
+                currentInput = <Map<String, dynamic>>[...followUpOutputs];
+              } else {
+                currentInput = <Map<String, dynamic>>[...responsesInitialInput];
+                if (responseOutputItems.isNotEmpty) {
+                  currentInput.addAll(responseOutputItems);
+                }
+                currentInput.addAll(followUpOutputs);
               }
-              currentInput.addAll(followUpOutputs);
 
               // Iteratively request until the model stops issuing tool calls,
               // consistent with how Claude, Gemini and OpenAI Chat Completions
@@ -2564,6 +2594,8 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                 final body2 = <String, dynamic>{
                   'model': upstreamModelId,
                   'input': currentInput,
+                  if (info.isOpenAIHost && lastResponseId != null)
+                    'previous_response_id': lastResponseId,
                   'stream': true,
                   if (responsesToolsSpec.isNotEmpty)
                     'tools': responsesToolsSpec,
@@ -2706,6 +2738,9 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                         }
                       } else if (o is Map &&
                           (o['type'] ?? '') == 'response.completed') {
+                        final responseId = (o['response']?['id'] ?? '')
+                            .toString();
+                        if (responseId.isNotEmpty) lastResponseId = responseId;
                         // usage
                         final u2 = o['response']?['usage'];
                         if (u2 != null) {
@@ -2832,11 +2867,16 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                     toolResults: resultsInfo2,
                   );
                 }
-                // Extend current input with this round's model output and our outputs
-                if (responseOutputItems2.isNotEmpty) {
-                  currentInput.addAll(responseOutputItems2);
+                // Extend current input with this round's model output and our outputs.
+                // With previous_response_id, only new tool outputs are needed.
+                if (info.isOpenAIHost && lastResponseId != null) {
+                  currentInput = <Map<String, dynamic>>[...followUpOutputs2];
+                } else {
+                  if (responseOutputItems2.isNotEmpty) {
+                    currentInput.addAll(responseOutputItems2);
+                  }
+                  currentInput.addAll(followUpOutputs2);
                 }
-                currentInput.addAll(followUpOutputs2);
               }
 
               // Safety
