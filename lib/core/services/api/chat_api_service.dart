@@ -381,6 +381,7 @@ class ChatApiService {
     Map<String, dynamic>? extraBody,
     bool stream = true,
     String? requestId,
+    String? verbosity,
   }) async* {
     final kind = ProviderConfig.classify(
       config.id,
@@ -416,6 +417,7 @@ class ChatApiService {
             extraHeaders: extraHeaders,
             extraBody: extraBody,
             stream: stream,
+            verbosity: verbosity,
           );
         } else {
           yield* _sendOpenAIChatCompletionsStream(
@@ -433,6 +435,7 @@ class ChatApiService {
             extraHeaders: extraHeaders,
             extraBody: extraBody,
             stream: stream,
+            verbosity: verbosity,
           );
         }
       } else if (kind == ProviderKind.claude) {

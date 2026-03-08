@@ -31,6 +31,7 @@ class Assistant {
   final int?
   thinkingBudget; // null = use global/default; 0=off; >0 tokens budget
   final int? maxTokens; // null = unlimited
+  final String? verbosity; // null = default (medium); "low", "medium", "high"
   final String systemPrompt;
   final String messageTemplate; // e.g. "{{ message }}"
   final List<String> mcpServerIds; // bound MCP server IDs
@@ -65,6 +66,7 @@ class Assistant {
     this.streamOutput = true,
     this.thinkingBudget,
     this.maxTokens,
+    this.verbosity,
     this.systemPrompt = '',
     this.messageTemplate = '{{ message }}',
     this.mcpServerIds = const <String>[],
@@ -94,6 +96,7 @@ class Assistant {
     bool? streamOutput,
     int? thinkingBudget,
     int? maxTokens,
+    String? verbosity,
     String? systemPrompt,
     String? messageTemplate,
     List<String>? mcpServerIds,
@@ -112,6 +115,7 @@ class Assistant {
     bool clearTopP = false,
     bool clearThinkingBudget = false,
     bool clearMaxTokens = false,
+    bool clearVerbosity = false,
     bool clearBackground = false,
   }) {
     return Assistant(
@@ -133,6 +137,7 @@ class Assistant {
           ? null
           : (thinkingBudget ?? this.thinkingBudget),
       maxTokens: clearMaxTokens ? null : (maxTokens ?? this.maxTokens),
+      verbosity: clearVerbosity ? null : (verbosity ?? this.verbosity),
       systemPrompt: systemPrompt ?? this.systemPrompt,
       messageTemplate: messageTemplate ?? this.messageTemplate,
       mcpServerIds: mcpServerIds ?? this.mcpServerIds,
@@ -165,6 +170,7 @@ class Assistant {
     'streamOutput': streamOutput,
     'thinkingBudget': thinkingBudget,
     'maxTokens': maxTokens,
+    'verbosity': verbosity,
     'systemPrompt': systemPrompt,
     'messageTemplate': messageTemplate,
     'mcpServerIds': mcpServerIds,
@@ -194,6 +200,7 @@ class Assistant {
     streamOutput: json['streamOutput'] as bool? ?? true,
     thinkingBudget: (json['thinkingBudget'] as num?)?.toInt(),
     maxTokens: (json['maxTokens'] as num?)?.toInt(),
+    verbosity: json['verbosity'] as String?,
     systemPrompt: (json['systemPrompt'] as String?) ?? '',
     messageTemplate: (json['messageTemplate'] as String?) ?? '{{ message }}',
     mcpServerIds:

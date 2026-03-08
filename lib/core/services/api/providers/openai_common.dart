@@ -513,6 +513,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
   Map<String, String>? extraHeaders,
   Map<String, dynamic>? extraBody,
   bool stream = true,
+  String? verbosity,
 }) async* {
   final upstreamModelId = _apiModelId(config, modelId);
   final url = _openAICompatibleUrl(config);
@@ -528,14 +529,15 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
   final modelLower = upstreamModelId.toLowerCase();
   final bool isAzureOpenAI = host.contains('openai.azure.com');
   // Direct OpenAI API supports previous_response_id for Responses API
-  final bool isOpenAIHost =
-      host.contains('openai.com') && !isAzureOpenAI;
+  final bool isOpenAIHost = host.contains('openai.com') && !isAzureOpenAI;
   // GPT-5.4 benefits from phase annotations on assistant messages
   final bool usePhase =
       isOpenAIHost &&
       config.useResponseApi == true &&
-      RegExp(r'gpt-5\.4(?:$|[-.])', caseSensitive: false)
-          .hasMatch(upstreamModelId);
+      RegExp(
+        r'gpt-5\.4(?:$|[-.])',
+        caseSensitive: false,
+      ).hasMatch(upstreamModelId);
   final bool isMimoHost = host.contains('xiaomimimo');
   final bool isMimoModel =
       modelLower.startsWith('mimo-') || modelLower.contains('/mimo-');
@@ -809,8 +811,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
           // GPT-5.4: annotate assistant messages with phase to prevent
           // early stopping in long tool-calling chains.
           if (usePhase) {
-            msg['phase'] =
-                hasToolCalls ? 'commentary' : 'final_answer';
+            msg['phase'] = hasToolCalls ? 'commentary' : 'final_answer';
           }
           input.add(msg);
         } else {
@@ -829,8 +830,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
             ],
           };
           if (usePhase) {
-            msg['phase'] =
-                hasToolCalls ? 'commentary' : 'final_answer';
+            msg['phase'] = hasToolCalls ? 'commentary' : 'final_answer';
           }
           input.add(msg);
         } else {
@@ -853,6 +853,9 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
           'summary': 'auto',
           if (effort != 'auto') 'effort': effort,
         },
+      // GPT-5 family: verbosity (Responses API nests under 'text')
+      if (verbosity != null && isOpenAIGpt5FamilyModel(upstreamModelId))
+        'text': {'verbosity': verbosity},
     };
     _applyCompatibleResponsesReasoning(
       body,
@@ -1050,6 +1053,8 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
         if (tools != null && tools.isNotEmpty)
           'tools': _cleanToolsForCompatibility(tools),
         if (tools != null && tools.isNotEmpty) 'tool_choice': 'auto',
+        if (verbosity != null && isOpenAIGpt5FamilyModel(upstreamModelId))
+          'verbosity': verbosity,
       };
     }
     setMaxTokens(body);
@@ -2401,9 +2406,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
               if (usePrevResponseId) {
                 currentInput = <Map<String, dynamic>>[...followUpOutputs];
               } else {
-                currentInput = <Map<String, dynamic>>[
-                  ...responsesInitialInput,
-                ];
+                currentInput = <Map<String, dynamic>>[...responsesInitialInput];
                 if (lastResponseOutputItems.isNotEmpty)
                   currentInput.addAll(lastResponseOutputItems);
                 currentInput.addAll(followUpOutputs);
