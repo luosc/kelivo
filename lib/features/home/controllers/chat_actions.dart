@@ -1030,6 +1030,7 @@ class ChatActions {
         requestId: conversationId,
         allowImagesApiRouting: ctx.allowImagesApiRouting,
         ocrActive: ctx.ocrActive,
+        verbosity: assistant?.verbosity ?? ctx.settings.verbosity,
       );
 
       await _conversationStreams[conversationId]?.cancel();

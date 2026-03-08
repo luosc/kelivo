@@ -153,15 +153,21 @@ class BatchDeletePlan {
 /// - Handle UI-specific concerns (snackbars, scrolling, animations)
 class HomeViewModel extends ChangeNotifier {
   HomeViewModel({
-    required this._chatService,
-    required this._messageBuilderService,
-    required this._messageGenerationService,
-    required this._generationController,
-    required this._streamController,
-    required this._chatController,
-    required this._contextProvider,
+    required ChatService chatService,
+    required MessageBuilderService messageBuilderService,
+    required MessageGenerationService messageGenerationService,
+    required GenerationController generationController,
+    required stream_ctrl.StreamController streamController,
+    required ChatController chatController,
+    required BuildContext contextProvider,
     required this.getTitleForLocale,
-  }) {
+  }) : _chatService = chatService,
+       _messageBuilderService = messageBuilderService,
+       _messageGenerationService = messageGenerationService,
+       _generationController = generationController,
+       _streamController = streamController,
+       _chatController = chatController,
+       _contextProvider = contextProvider {
     // Initialize ChatActions
     _chatActions = ChatActions(
       chatService: _chatService,

@@ -1864,6 +1864,10 @@ class HomePageController extends ChangeNotifier {
     return budget >= 1024;
   }
 
+  bool supportsVerbosity(String providerKey, String modelId) {
+    return _generationController.supportsVerbosity(providerKey, modelId);
+  }
+
   // ============================================================================
   // Public Methods - Helpers
   // ============================================================================

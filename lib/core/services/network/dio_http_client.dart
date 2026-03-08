@@ -57,8 +57,9 @@ class NetworkProxyConfig {
 }
 
 class DioHttpClient extends http.BaseClient {
-  DioHttpClient({this._proxy, CancelToken? cancelToken})
-    : _cancelToken = cancelToken ?? CancelToken(),
+  DioHttpClient({NetworkProxyConfig? proxy, CancelToken? cancelToken})
+    : _proxy = proxy,
+      _cancelToken = cancelToken ?? CancelToken(),
       _dio = Dio(
         BaseOptions(
           connectTimeout: null,

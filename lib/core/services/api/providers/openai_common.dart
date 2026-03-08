@@ -883,6 +883,7 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
   Map<String, String>? extraHeaders,
   Map<String, dynamic>? extraBody,
   bool stream = true,
+  String? verbosity,
 }) async* {
   final upstreamModelId = _apiModelId(config, modelId);
   final url = _openAICompatibleUrl(config);
@@ -1230,6 +1231,9 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
           'summary': 'auto',
           if (effort != 'auto') 'effort': effort,
         },
+      // GPT-5 family: verbosity (Responses API nests under 'text')
+      if (verbosity != null && isOpenAIGpt5FamilyModel(upstreamModelId))
+        'text': {'verbosity': verbosity},
     };
     _applyCompatibleResponsesReasoning(
       body,
@@ -1313,6 +1317,8 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
         if (tools != null && tools.isNotEmpty)
           'tools': _cleanToolsForCompatibility(tools),
         if (tools != null && tools.isNotEmpty) 'tool_choice': 'auto',
+        if (verbosity != null && isOpenAIGpt5FamilyModel(upstreamModelId))
+          'verbosity': verbosity,
       };
     }
     setMaxTokens(body);

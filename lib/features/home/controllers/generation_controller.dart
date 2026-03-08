@@ -10,6 +10,7 @@ import '../../../utils/assistant_regex.dart';
 import '../../../core/models/assistant_regex.dart';
 import '../services/message_builder_service.dart';
 import '../services/ask_user_interaction_service.dart';
+import '../../../core/utils/openai_model_compat.dart';
 import '../services/tool_handler_service.dart';
 import '../services/tool_approval_service.dart';
 import 'chat_controller.dart';
@@ -112,6 +113,10 @@ class GenerationController {
     if (budget == null) return true; // treat null as default/auto -> enabled
     if (budget == -1) return true; // auto
     return budget >= 1024;
+  }
+
+  bool supportsVerbosity(String providerKey, String modelId) {
+    return isOpenAIGpt5FamilyModel(modelId);
   }
 
   // ============================================================================

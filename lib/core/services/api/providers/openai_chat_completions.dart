@@ -88,6 +88,7 @@ Stream<ChatStreamChunk> _sendOpenAIChatCompletionsStream(
   Map<String, String>? extraHeaders,
   Map<String, dynamic>? extraBody,
   bool stream = true,
+  String? verbosity,
 }) {
   final cfg = config.copyWith(useResponseApi: false);
   return _sendOpenAIStream(
@@ -105,5 +106,6 @@ Stream<ChatStreamChunk> _sendOpenAIChatCompletionsStream(
     extraHeaders: extraHeaders,
     extraBody: extraBody,
     stream: stream,
+    verbosity: verbosity,
   );
 }

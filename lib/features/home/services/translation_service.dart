@@ -46,7 +46,10 @@ class TranslationResult {
 /// - 流式更新翻译结果
 /// - 保存翻译到数据库
 class TranslationService {
-  TranslationService({required this.chatService, required this._getContext});
+  TranslationService({
+    required this.chatService,
+    required BuildContext Function() getContext,
+  }) : _getContext = getContext;
 
   final ChatService chatService;
   final BuildContext Function() _getContext;

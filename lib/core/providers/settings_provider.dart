@@ -104,6 +104,7 @@ class SettingsProvider extends ChangeNotifier {
   static const String _themePaletteKey = 'theme_palette_v1';
   static const String _useDynamicColorKey = 'use_dynamic_color_v1';
   static const String _thinkingBudgetKey = 'thinking_budget_v1';
+  static const String _verbosityKey = 'verbosity_v1';
   static const String _titleGenerationThinkingEnabledKey =
       'title_generation_thinking_enabled_v1';
   static const String _displayShowUserAvatarKey = 'display_show_user_avatar_v1';
@@ -910,6 +911,8 @@ class SettingsProvider extends ChangeNotifier {
         : lmp;
     // load thinking budget (reasoning strength)
     _thinkingBudget = prefs.getInt(_thinkingBudgetKey);
+    // load verbosity (GPT-5 family)
+    _verbosity = prefs.getString(_verbosityKey);
     _titleGenerationThinkingEnabled =
         prefs.getBool(_titleGenerationThinkingEnabledKey) ?? true;
 
@@ -3294,6 +3297,20 @@ DO NOT GIVE ANSWERS OR DO HOMEWORK FOR THE USER. If the user asks a math or logi
     }
   }
 
+  // Verbosity (GPT-5 family): null = default (medium); "low", "medium", "high"
+  String? _verbosity;
+  String? get verbosity => _verbosity;
+  Future<void> setVerbosity(String? value) async {
+    _verbosity = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    if (value == null) {
+      await prefs.remove(_verbosityKey);
+    } else {
+      await prefs.setString(_verbosityKey, value);
+    }
+  }
+
   // Title generation thinking toggle. Defaults to true for backward compatibility.
   bool _titleGenerationThinkingEnabled = true;
   bool get titleGenerationThinkingEnabled => _titleGenerationThinkingEnabled;
@@ -4224,6 +4241,7 @@ DO NOT GIVE ANSWERS OR DO HOMEWORK FOR THE USER. If the user asks a math or logi
     copy._ocrPrompt = _ocrPrompt;
     copy._ocrEnabled = _ocrEnabled;
     copy._thinkingBudget = _thinkingBudget;
+    copy._verbosity = _verbosity;
     copy._titleGenerationThinkingEnabled = _titleGenerationThinkingEnabled;
     copy._showUserAvatar = _showUserAvatar;
     copy._showModelIcon = _showModelIcon;

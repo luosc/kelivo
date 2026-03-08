@@ -2549,6 +2549,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chatInputBarMcpServersTooltip => 'MCP Servers';
 
   @override
+  String get verbosityTooltip => 'Verbosity';
+
+  @override
+  String get verbosityLow => 'Low';
+
+  @override
+  String get verbosityMedium => 'Medium';
+
+  @override
+  String get verbosityHigh => 'High';
+
+  @override
   String get chatInputBarMoreTooltip => 'Add';
 
   @override
