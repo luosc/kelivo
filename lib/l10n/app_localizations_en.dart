@@ -2049,6 +2049,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get verbosityTooltip => 'Verbosity';
 
   @override
+  String get verbosityDefault => 'Default';
+
+  @override
   String get verbosityLow => 'Low';
 
   @override
