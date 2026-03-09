@@ -1957,6 +1957,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get verbosityTooltip => '回答详细程度';
 
   @override
+  String get verbosityDefault => '默认';
+
+  @override
   String get verbosityLow => '简洁';
 
   @override
@@ -6114,6 +6117,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get verbosityTooltip => '回答详细程度';
 
   @override
+  String get verbosityDefault => '默认';
+
+  @override
   String get verbosityLow => '简洁';
 
   @override
@@ -10216,6 +10222,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get verbosityTooltip => '回答詳細程度';
+
+  @override
+  String get verbosityDefault => '預設';
 
   @override
   String get verbosityLow => '簡潔';
