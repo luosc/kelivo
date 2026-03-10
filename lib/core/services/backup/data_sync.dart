@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:archive/archive_io.dart';
 import 'package:http/http.dart' as http;
@@ -118,154 +117,118 @@ class DataSync {
   Future<File> prepareBackupFile(WebDavConfig cfg) async {
     final tmp = await _ensureTempDir();
     final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final outPath = p.join(tmp.path, 'kelivo_backup_$timestamp.zip');
-    final outFile = File(outPath);
+    final outFile = File(p.join(tmp.path, 'kelivo_backup_$timestamp.zip'));
     if (await outFile.exists()) await outFile.delete();
 
-    // --- Step 1: Prepare temp files that need ChatService (main isolate) ---
+    // Use Archive instead of ZipFileEncoder for better control
+    final archive = Archive();
+
     // settings.json
     final settingsJson = await _exportSettingsJson();
-    final settingsTmp = await _writeTempText('_bk_settings.json', settingsJson);
+    final settingsBytes = utf8.encode(settingsJson);
+    final settingsArchiveFile = ArchiveFile(
+      'settings.json',
+      settingsBytes.length,
+      settingsBytes,
+    );
+    archive.addFile(settingsArchiveFile);
 
-    // chats.json — stream to file to avoid huge string in memory
-    File? chatsTmp;
+    // chats
     if (cfg.includeChats) {
-      chatsTmp = await _exportChatsToFile();
-    }
-
-    // Resolve directory paths (need AppDirectories on main isolate)
-    final uploadDirPath = (await _getUploadDir()).path;
-    final avatarsDirPath = (await _getAvatarsDir()).path;
-    final imagesDirPath = (await _getImagesDir()).path;
-
-    // --- Step 2: Run CPU-heavy ZIP packing in a separate isolate ---
-    await Isolate.run(() {
-      _packZipSync(
-        outPath: outPath,
-        settingsPath: settingsTmp.path,
-        chatsPath: chatsTmp?.path,
-        includeFiles: cfg.includeFiles,
-        uploadDirPath: uploadDirPath,
-        avatarsDirPath: avatarsDirPath,
-        imagesDirPath: imagesDirPath,
+      final chatsJson = await _exportChatsJson();
+      final chatsBytes = utf8.encode(chatsJson);
+      final chatsArchiveFile = ArchiveFile(
+        'chats.json',
+        chatsBytes.length,
+        chatsBytes,
       );
-    });
-
-    // Cleanup temp intermediate files
-    try {
-      await settingsTmp.delete();
-    } catch (_) {}
-    try {
-      if (chatsTmp != null) await chatsTmp.delete();
-    } catch (_) {}
-
-    return outFile;
-  }
-
-  /// Synchronous ZIP packing — runs inside an Isolate.
-  static void _packZipSync({
-    required String outPath,
-    required String settingsPath,
-    String? chatsPath,
-    required bool includeFiles,
-    required String uploadDirPath,
-    required String avatarsDirPath,
-    required String imagesDirPath,
-  }) {
-    final encoder = ZipFileEncoder();
-    encoder.create(outPath);
-
-    // settings.json
-    encoder.addFileSync(File(settingsPath), 'settings.json');
-
-    // chats.json
-    if (chatsPath != null) {
-      encoder.addFileSync(File(chatsPath), 'chats.json');
+      archive.addFile(chatsArchiveFile);
     }
 
     // files under upload/, images/, and avatars/
-    if (includeFiles) {
-      _addDirectoryToZip(encoder, uploadDirPath, 'upload');
-      _addDirectoryToZip(encoder, avatarsDirPath, 'avatars');
-      _addDirectoryToZip(encoder, imagesDirPath, 'images');
-    }
-
-    encoder.closeSync();
-  }
-
-  /// Add all files from [srcDirPath] into the zip under [zipPrefix].
-  static void _addDirectoryToZip(
-    ZipFileEncoder encoder,
-    String srcDirPath,
-    String zipPrefix,
-  ) {
-    final dir = Directory(srcDirPath);
-    if (!dir.existsSync()) return;
-    final entries = dir.listSync(recursive: true, followLinks: false);
-    for (final ent in entries) {
-      if (ent is File) {
-        final rel = p.relative(ent.path, from: srcDirPath);
-        // ZIP entries must use forward slashes regardless of platform
-        final relPosix = rel.replaceAll('\\', '/');
-        encoder.addFileSync(ent, '$zipPrefix/$relPosix');
-      }
-    }
-  }
-
-  /// Synchronous ZIP extraction — runs inside an Isolate.
-  /// Uses InputFileStream so the ZIP bytes are read from disk on demand rather
-  /// than loading the entire archive into a single byte array.
-  static void _extractZipSync(String zipPath, String extractDirPath) {
-    final inputStream = InputFileStream(zipPath);
-    try {
-      final archive = ZipDecoder().decodeStream(inputStream);
-      for (final entry in archive) {
-        // Normalize entry name to use forward slashes and remove traversal
-        final normalized = entry.name.replaceAll('\\', '/');
-        final parts = normalized
-            .split('/')
-            .where((seg) => seg.isNotEmpty && seg != '.' && seg != '..')
-            .toList();
-        if (parts.isEmpty) continue;
-        final outPath = p.joinAll([extractDirPath, ...parts]);
-        if (entry.isFile) {
-          final outFile = File(outPath)..createSync(recursive: true);
-          outFile.writeAsBytesSync(entry.content as List<int>);
-        } else {
-          Directory(outPath).createSync(recursive: true);
+    if (cfg.includeFiles) {
+      // Export upload directory
+      final uploadDir = await _getUploadDir();
+      if (await uploadDir.exists()) {
+        final entries = uploadDir.listSync(recursive: true, followLinks: false);
+        for (final ent in entries) {
+          if (ent is File) {
+            final rel = p.relative(ent.path, from: uploadDir.path);
+            // ZIP entries must use forward slashes regardless of platform
+            final relPosix = rel.replaceAll('\\', '/');
+            final fileBytes = await ent.readAsBytes();
+            final archiveFile = ArchiveFile(
+              'upload/$relPosix',
+              fileBytes.length,
+              fileBytes,
+            );
+            archive.addFile(archiveFile);
+          }
         }
       }
-    } finally {
-      inputStream.close();
+
+      // Export avatars directory
+      final avatarsDir = await _getAvatarsDir();
+      if (await avatarsDir.exists()) {
+        final entries = avatarsDir.listSync(
+          recursive: true,
+          followLinks: false,
+        );
+        for (final ent in entries) {
+          if (ent is File) {
+            final rel = p.relative(ent.path, from: avatarsDir.path);
+            final relPosix = rel.replaceAll('\\', '/');
+            final fileBytes = await ent.readAsBytes();
+            final archiveFile = ArchiveFile(
+              'avatars/$relPosix',
+              fileBytes.length,
+              fileBytes,
+            );
+            archive.addFile(archiveFile);
+          }
+        }
+      }
+
+      // Export images directory
+      final imagesDir = await _getImagesDir();
+      if (await imagesDir.exists()) {
+        final entries = imagesDir.listSync(recursive: true, followLinks: false);
+        for (final ent in entries) {
+          if (ent is File) {
+            final rel = p.relative(ent.path, from: imagesDir.path);
+            final relPosix = rel.replaceAll('\\', '/');
+            final fileBytes = await ent.readAsBytes();
+            final archiveFile = ArchiveFile(
+              'images/$relPosix',
+              fileBytes.length,
+              fileBytes,
+            );
+            archive.addFile(archiveFile);
+          }
+        }
+      }
     }
+
+    // Encode archive to ZIP
+    final zipEncoder = ZipEncoder();
+    final zipBytes = zipEncoder.encode(archive)!;
+    await outFile.writeAsBytes(zipBytes);
+
+    return outFile;
   }
 
   Future<void> backupToWebDav(WebDavConfig cfg) async {
     final file = await prepareBackupFile(cfg);
     await _ensureCollection(cfg);
     final target = _fileUri(cfg, p.basename(file.path));
-    final fileLen = await file.length();
-    // Use a streamed request so we don't load the entire file into RAM.
-    final req = http.StreamedRequest('PUT', target);
-    req.headers.addAll({
-      'content-type': 'application/zip',
-      'content-length': fileLen.toString(),
-      ..._authHeaders(cfg),
-    });
-    // Pipe the file stream into the request body.
-    file.openRead().listen(
-      req.sink.add,
-      onDone: req.sink.close,
-      onError: req.sink.addError,
+    final bytes = await file.readAsBytes();
+    final res = await http.put(
+      target,
+      headers: {'content-type': 'application/zip', ..._authHeaders(cfg)},
+      body: bytes,
     );
-    final client = http.Client();
-    try {
-      final res = await client.send(req).then(http.Response.fromStream);
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw Exception('Upload failed: ${res.statusCode}');
-      }
-    } finally {
-      client.close();
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('Upload failed: ${res.statusCode}');
     }
   }
 
@@ -369,30 +332,23 @@ class DataSync {
   Future<void> restoreFromWebDav(
     WebDavConfig cfg,
     BackupFileItem item, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
-    // Stream the download to a file instead of buffering in memory.
-    final client = http.Client();
-    try {
-      final req = http.Request('GET', item.href);
-      req.headers.addAll(_authHeaders(cfg));
-      final streamed = await client.send(req);
-      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
-        // Drain the response body to allow the client to close cleanly.
-        await streamed.stream.drain<void>();
-        throw Exception('Download failed: ${streamed.statusCode}');
-      }
-      final tmpDir = await _ensureTempDir();
-      final file = File(p.join(tmpDir.path, item.displayName));
-      final sink = file.openWrite();
-      await streamed.stream.pipe(sink);
-      await _restoreFromBackupFile(file, cfg, mode: mode);
-      try {
-        await file.delete();
-      } catch (_) {}
-    } finally {
-      client.close();
+    // Backward compatibility: if options is null, construct from legacy mode
+    final opts = options ?? RestoreOptions.fromMode(mode);
+
+    final res = await http.get(item.href, headers: _authHeaders(cfg));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('Download failed: ${res.statusCode}');
     }
+    final tmpDir = await _ensureTempDir();
+    final file = File(p.join(tmpDir.path, item.displayName));
+    await file.writeAsBytes(res.bodyBytes);
+    await _restoreFromBackupFile(file, cfg, opts);
+    try {
+      await file.delete();
+    } catch (_) {}
   }
 
   Future<void> deleteWebDavBackupFile(
@@ -412,10 +368,13 @@ class DataSync {
   Future<void> restoreFromLocalFile(
     File file,
     WebDavConfig cfg, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
     if (!await file.exists()) throw Exception('备份文件不存在');
-    await _restoreFromBackupFile(file, cfg, mode: mode);
+    // Backward compatibility
+    final opts = options ?? RestoreOptions.fromMode(mode);
+    await _restoreFromBackupFile(file, cfg, opts);
   }
 
   // ===== Internal helpers =====
@@ -458,89 +417,250 @@ class DataSync {
     return jsonEncode(map);
   }
 
-  /// Stream chat data to a temporary JSON file instead of building a huge
-  /// in-memory String.  Uses IOSink for low memory overhead.
-  Future<File> _exportChatsToFile() async {
+  Future<String> _exportChatsJson() async {
     if (!chatService.initialized) {
       await chatService.init();
     }
     final conversations = chatService.getAllConversations();
-    final tmp = await _ensureTempDir();
-    final file = File(p.join(tmp.path, '_bk_chats.json'));
-    final sink = file.openWrite();
-
-    try {
-      sink.write('{"version":1,');
-
-      // --- conversations ---
-      sink.write('"conversations":[');
-      for (int i = 0; i < conversations.length; i++) {
-        if (i > 0) sink.write(',');
-        sink.write(jsonEncode(conversations[i].toJson()));
-        // Yield periodically so the main isolate can process UI frames
-        if (i % 50 == 0) await Future<void>.delayed(Duration.zero);
-      }
-      sink.write('],');
-
-      // --- messages, toolEvents, geminiThoughtSigs ---
-      sink.write('"messages":[');
-      final toolEvents = <String, List<Map<String, dynamic>>>{};
-      final geminiThoughtSigs = <String, String>{};
-      bool firstMsg = true;
-      for (final c in conversations) {
-        final msgs = chatService.getMessages(c.id);
-        for (final m in msgs) {
-          if (!firstMsg) sink.write(',');
-          firstMsg = false;
-          sink.write(jsonEncode(m.toJson()));
-          if (m.role == 'assistant') {
-            final ev = chatService.getToolEvents(m.id);
-            if (ev.isNotEmpty) toolEvents[m.id] = ev;
-            final sig = chatService.getGeminiThoughtSignature(m.id);
-            if (sig != null && sig.isNotEmpty) geminiThoughtSigs[m.id] = sig;
-          }
+    final allMsgs = <ChatMessage>[];
+    final toolEvents = <String, List<Map<String, dynamic>>>{};
+    final geminiThoughtSigs = <String, String>{};
+    for (final c in conversations) {
+      final msgs = chatService.getMessages(c.id);
+      allMsgs.addAll(msgs);
+      for (final m in msgs) {
+        if (m.role == 'assistant') {
+          final ev = chatService.getToolEvents(m.id);
+          if (ev.isNotEmpty) toolEvents[m.id] = ev;
+          final sig = chatService.getGeminiThoughtSignature(m.id);
+          if (sig != null && sig.isNotEmpty) geminiThoughtSigs[m.id] = sig;
         }
-        // Yield after each conversation
-        await Future<void>.delayed(Duration.zero);
       }
-      sink.write('],');
-
-      // --- toolEvents ---
-      sink.write('"toolEvents":');
-      sink.write(jsonEncode(toolEvents));
-      sink.write(',');
-
-      // --- geminiThoughtSigs ---
-      sink.write('"geminiThoughtSigs":');
-      sink.write(jsonEncode(geminiThoughtSigs));
-
-      sink.write('}');
-    } finally {
-      await sink.flush();
-      await sink.close();
     }
-
-    return file;
+    final obj = {
+      'version': 1,
+      'conversations': conversations.map((c) => c.toJson()).toList(),
+      'messages': allMsgs.map((m) => m.toJson()).toList(),
+      'toolEvents': toolEvents,
+      'geminiThoughtSigs': geminiThoughtSigs,
+    };
+    return jsonEncode(obj);
   }
 
   Future<void> _restoreFromBackupFile(
     File file,
-    WebDavConfig cfg, {
-    RestoreMode mode = RestoreMode.overwrite,
-  }) async {
-    // Extract to temp using file-stream decoding to avoid loading the full ZIP
-    // into RAM (the old approach called file.readAsBytes() which for a 600-800 MB
-    // file would allocate a contiguous byte array of the same size).
+    WebDavConfig cfg,
+    RestoreOptions options,
+  ) async {
+    // If it's a full overwrite (legacy behavior), use the robust legacy method
+    if (options.isFullOverwrite) {
+      await _legacyRestoreFromBackupFile(
+        file,
+        cfg,
+        mode: RestoreMode.overwrite,
+      );
+      return;
+    }
+
+    // Otherwise, use granular restore logic
+
+    // Extract to temp
     final tmp = await _ensureTempDir();
     final extractDir = Directory(
       p.join(tmp.path, 'restore_${DateTime.now().millisecondsSinceEpoch}'),
     );
     await extractDir.create(recursive: true);
+    final bytes = await file.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes);
+    for (final entry in archive) {
+      // Normalize entry name to use forward slashes and remove traversal
+      final normalized = entry.name.replaceAll('\\', '/');
+      final parts = normalized
+          .split('/')
+          .where((seg) => seg.isNotEmpty && seg != '.' && seg != '..')
+          .toList();
+      final outPath = p.joinAll([extractDir.path, ...parts]);
+      if (entry.isFile) {
+        final outFile = File(outPath)..createSync(recursive: true);
+        outFile.writeAsBytesSync(entry.content as List<int>);
+      } else {
+        Directory(outPath).createSync(recursive: true);
+      }
+    }
 
-    // Run ZIP extraction in an isolate to keep the UI responsive.
-    await Isolate.run(() {
-      _extractZipSync(file.path, extractDir.path);
-    });
+    // 1. Settings & Providers Restoration
+    final settingsFile = File(p.join(extractDir.path, 'settings.json'));
+    if (await settingsFile.exists()) {
+      try {
+        final txt = await settingsFile.readAsString();
+        final map = jsonDecode(txt) as Map<String, dynamic>;
+        final prefs = await SharedPreferencesAsync.instance;
+        final existing = await prefs.snapshot();
+
+        // Categorize keys
+        const providerKeys = {
+          'provider_configs_v1',
+          'providers_order_v1',
+          'pinned_models_v1',
+          'assistants_v1',
+          'assistant_tags_v1',
+          'assistant_tag_map_v1',
+          'assistant_tag_collapsed_v1',
+          'search_services_v1',
+          'quick_phrases_v1',
+        };
+
+        // Determine action for each key and apply
+        for (final entry in map.entries) {
+          final key = entry.key;
+          final newValue = entry.value;
+
+          final isProviderKey = providerKeys.contains(key);
+          final action = isProviderKey
+              ? options.providersAction
+              : options.settingsAction;
+
+          if (action == RestoreAction.ignore) {
+            continue;
+          } else if (action == RestoreAction.overwrite) {
+            await prefs.restoreSingle(key, newValue);
+          } else if (action == RestoreAction.merge) {
+            // Merge logic (reused from legacy)
+            // ... [Duplicate merge logic or abstract it] ...
+            // For simplicity, we can reuse the specific merge logic for known keys,
+            // and fallback to "preserve existing" for others.
+            await _mergeSetting(prefs, existing, key, newValue);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2. Chats Restoration
+    if (options.chatsAction != RestoreAction.ignore) {
+      final chatsFile = File(p.join(extractDir.path, 'chats.json'));
+      if (cfg.includeChats && await chatsFile.exists()) {
+        try {
+          final obj =
+              jsonDecode(await chatsFile.readAsString())
+                  as Map<String, dynamic>;
+          // Parse data
+          final convs =
+              (obj['conversations'] as List?)
+                  ?.map(
+                    (e) => Conversation.fromJson(
+                      (e as Map).cast<String, dynamic>(),
+                    ),
+                  )
+                  .toList() ??
+              const [];
+          final msgs =
+              (obj['messages'] as List?)
+                  ?.map(
+                    (e) => ChatMessage.fromJson(
+                      (e as Map).cast<String, dynamic>(),
+                    ),
+                  )
+                  .toList() ??
+              const [];
+          final toolEvents =
+              ((obj['toolEvents'] as Map?) ?? const <String, dynamic>{}).map(
+                (k, v) => MapEntry(
+                  k.toString(),
+                  (v as List)
+                      .cast<Map>()
+                      .map((e) => e.cast<String, dynamic>())
+                      .toList(),
+                ),
+              );
+          final geminiThoughtSigs =
+              ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{})
+                  .map((k, v) => MapEntry(k.toString(), v.toString()));
+
+          if (options.chatsAction == RestoreAction.overwrite) {
+            await chatService.clearAllData();
+            await _restoreChats(
+              convs,
+              msgs,
+              toolEvents,
+              geminiThoughtSigs,
+              overwrite: true,
+            );
+          } else {
+            // Merge
+            await _restoreChats(
+              convs,
+              msgs,
+              toolEvents,
+              geminiThoughtSigs,
+              overwrite: false,
+            );
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 3. Files Restoration
+    if (options.filesAction != RestoreAction.ignore && cfg.includeFiles) {
+      final isOverwrite = options.filesAction == RestoreAction.overwrite;
+
+      // Uploads
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'upload')),
+        await _getUploadDir(),
+        overwrite: isOverwrite,
+      );
+
+      // Images
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'images')),
+        await _getImagesDir(),
+        overwrite: isOverwrite,
+      );
+
+      // Avatars
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'avatars')),
+        await _getAvatarsDir(),
+        overwrite: isOverwrite,
+      );
+    }
+
+    try {
+      await extractDir.delete(recursive: true);
+    } catch (_) {}
+  }
+
+  /// Original logic for full overwrite (renamed)
+  Future<void> _legacyRestoreFromBackupFile(
+    File file,
+    WebDavConfig cfg, {
+    RestoreMode mode = RestoreMode.overwrite,
+  }) async {
+    // Extract to temp
+    final tmp = await _ensureTempDir();
+    final extractDir = Directory(
+      p.join(
+        tmp.path,
+        'restore_legacy_${DateTime.now().millisecondsSinceEpoch}',
+      ),
+    );
+    await extractDir.create(recursive: true);
+    final bytes = await file.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes);
+    for (final entry in archive) {
+      final normalized = entry.name.replaceAll('\\', '/');
+      final parts = normalized
+          .split('/')
+          .where((seg) => seg.isNotEmpty && seg != '.' && seg != '..')
+          .toList();
+      final outPath = p.joinAll([extractDir.path, ...parts]);
+      if (entry.isFile) {
+        final outFile = File(outPath)..createSync(recursive: true);
+        outFile.writeAsBytesSync(entry.content as List<int>);
+      } else {
+        Directory(outPath).createSync(recursive: true);
+      }
+    }
 
     // Restore settings
     final settingsFile = File(p.join(extractDir.path, 'settings.json'));
@@ -550,301 +670,11 @@ class DataSync {
         final map = jsonDecode(txt) as Map<String, dynamic>;
         final prefs = await SharedPreferencesAsync.instance;
         if (mode == RestoreMode.overwrite) {
-          // For overwrite mode, restore all settings
           await prefs.restore(map);
         } else {
-          // For merge mode, intelligently merge settings
           final existing = await prefs.snapshot();
-
-          // Keys that should be merged as JSON arrays/objects
-          const mergeableKeys = {
-            'assistants_v1', // Assistant configurations
-            'provider_configs_v1', // Provider configurations
-            'pinned_models_v1', // Pinned models list
-            'providers_order_v1', // Provider order list
-            'provider_groups_v1', // Provider group list [{id,name,createdAt}]
-            'provider_group_map_v1', // providerKey -> groupId
-            'provider_group_collapsed_v1', // groupId|__ungrouped__ -> bool
-            'search_services_v1', // Search services configuration
-            'assistant_tags_v1', // Ordered tag list [{id,name}]
-            'assistant_tag_map_v1', // assistantId -> tagId
-            'assistant_tag_collapsed_v1', // tagId -> bool
-          };
-
           for (final entry in map.entries) {
-            final key = entry.key;
-            final newValue = entry.value;
-
-            if (mergeableKeys.contains(key)) {
-              // Special handling for mergeable configurations
-              if (key == 'assistants_v1' && existing.containsKey(key)) {
-                // Merge assistants by ID with field-level rules.
-                // Preserve local avatar if already set to avoid clearing/overwriting.
-                try {
-                  final existingAssistants =
-                      jsonDecode(existing[key] as String) as List;
-                  final newAssistants = jsonDecode(newValue as String) as List;
-                  final assistantMap = <String, Map<String, dynamic>>{};
-
-                  // Seed map with existing assistants
-                  for (final a in existingAssistants) {
-                    if (a is Map && a.containsKey('id')) {
-                      // Store as mutable map<String, dynamic>
-                      assistantMap[a['id'].toString()] =
-                          Map<String, dynamic>.from(a);
-                    }
-                  }
-
-                  // Merge with imported assistants
-                  for (final a in newAssistants) {
-                    if (a is Map && a.containsKey('id')) {
-                      final id = a['id'].toString();
-                      final incoming = Map<String, dynamic>.from(a);
-
-                      if (!assistantMap.containsKey(id)) {
-                        // New assistant entirely
-                        assistantMap[id] = incoming;
-                        continue;
-                      }
-
-                      final local = assistantMap[id]!;
-
-                      // Start with default behavior: imported values override
-                      final merged = <String, dynamic>{...local, ...incoming};
-
-                      // Special rule: do not override existing non-empty avatar
-                      final localAvatar = (local['avatar'] ?? '').toString();
-                      final incomingAvatar = (incoming['avatar'] ?? '');
-                      if (localAvatar.trim().isNotEmpty) {
-                        // Keep local avatar regardless of imported value
-                        merged['avatar'] = localAvatar;
-                      } else {
-                        // Only take imported avatar if present (non-empty)
-                        final s = incomingAvatar is String
-                            ? incomingAvatar
-                            : incomingAvatar?.toString();
-                        if (s == null || s.trim().isEmpty) {
-                          merged['avatar'] = null;
-                        } else {
-                          merged['avatar'] = s;
-                        }
-                      }
-
-                      // Special rule: do not override existing non-empty background
-                      final localBg = (local['background'] ?? '').toString();
-                      final incomingBg = (incoming['background'] ?? '');
-                      if (localBg.trim().isNotEmpty) {
-                        // Keep local background regardless of imported value
-                        merged['background'] = localBg;
-                      } else {
-                        // Only take imported background if present (non-empty)
-                        final sb = incomingBg is String
-                            ? incomingBg
-                            : incomingBg?.toString();
-                        if (sb == null || sb.trim().isEmpty) {
-                          merged['background'] = null;
-                        } else {
-                          merged['background'] = sb;
-                        }
-                      }
-
-                      assistantMap[id] = merged;
-                    }
-                  }
-
-                  final mergedAssistants = assistantMap.values.toList();
-                  await prefs.restoreSingle(key, jsonEncode(mergedAssistants));
-                } catch (e) {
-                  // If merge fails, keep existing
-                }
-              } else if (key == 'provider_configs_v1' &&
-                  existing.containsKey(key)) {
-                // Merge provider configs: combine both maps
-                try {
-                  final existingConfigs =
-                      jsonDecode(existing[key] as String)
-                          as Map<String, dynamic>;
-                  final newConfigs =
-                      jsonDecode(newValue as String) as Map<String, dynamic>;
-
-                  // Merge configs, new values override existing for same keys
-                  final mergedConfigs = {...existingConfigs, ...newConfigs};
-                  await prefs.restoreSingle(key, jsonEncode(mergedConfigs));
-                } catch (e) {
-                  // If merge fails, keep existing
-                }
-              } else if (key == 'pinned_models_v1' &&
-                  existing.containsKey(key)) {
-                // Merge pinned models: combine and deduplicate
-                try {
-                  final existingModels =
-                      jsonDecode(existing[key] as String) as List;
-                  final newModels = jsonDecode(newValue as String) as List;
-                  final modelSet = <String>{};
-
-                  // Add all models to set for deduplication
-                  for (final model in existingModels) {
-                    if (model is String) modelSet.add(model);
-                  }
-                  for (final model in newModels) {
-                    if (model is String) modelSet.add(model);
-                  }
-
-                  await prefs.restoreSingle(key, jsonEncode(modelSet.toList()));
-                } catch (e) {
-                  // If merge fails, keep existing
-                }
-              } else if (key == 'assistant_tags_v1') {
-                // Merge tag list by id; keep existing order, append new tags at end (incoming order)
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingList =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <dynamic>[]
-                      : (jsonDecode(existingStr) as List);
-                  final newList = (newStr == null || newStr.isEmpty)
-                      ? <dynamic>[]
-                      : (jsonDecode(newStr) as List);
-
-                  // Map existing by id and maintain order
-                  final existingOrder = <String>[];
-                  final tagById = <String, Map<String, dynamic>>{};
-                  for (final e in existingList) {
-                    if (e is Map && e['id'] != null) {
-                      final id = e['id'].toString();
-                      existingOrder.add(id);
-                      tagById[id] = Map<String, dynamic>.from(e);
-                    }
-                  }
-                  // Add new tags that don't exist yet
-                  for (final e in newList) {
-                    if (e is Map && e['id'] != null) {
-                      final id = e['id'].toString();
-                      if (!tagById.containsKey(id)) {
-                        tagById[id] = Map<String, dynamic>.from(e);
-                        existingOrder.add(id);
-                      }
-                    }
-                  }
-                  final merged = [
-                    for (final id in existingOrder) tagById[id],
-                  ].whereType<Map<String, dynamic>>().toList();
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {
-                  // If merge fails, fall back to existing (no action)
-                }
-              } else if (key == 'assistant_tag_map_v1') {
-                // Merge assistant->tag mapping; prefer existing on conflicts
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingMap =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(existingStr) as Map<String, dynamic>);
-                  final newMap = (newStr == null || newStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(newStr) as Map<String, dynamic>);
-                  final merged = <String, dynamic>{...newMap, ...existingMap};
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {}
-              } else if (key == 'assistant_tag_collapsed_v1') {
-                // Merge collapse states; prefer existing on conflicts
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingMap =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(existingStr) as Map<String, dynamic>);
-                  final newMap = (newStr == null || newStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(newStr) as Map<String, dynamic>);
-                  final merged = <String, dynamic>{...newMap, ...existingMap};
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {}
-              } else if (key == 'provider_groups_v1') {
-                // Merge provider groups by id; keep existing order, append new groups at end (incoming order)
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingList =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <dynamic>[]
-                      : (jsonDecode(existingStr) as List);
-                  final newList = (newStr == null || newStr.isEmpty)
-                      ? <dynamic>[]
-                      : (jsonDecode(newStr) as List);
-
-                  final existingOrder = <String>[];
-                  final groupById = <String, Map<String, dynamic>>{};
-                  for (final e in existingList) {
-                    if (e is Map && e['id'] != null) {
-                      final id = e['id'].toString();
-                      existingOrder.add(id);
-                      groupById[id] = Map<String, dynamic>.from(e);
-                    }
-                  }
-                  for (final e in newList) {
-                    if (e is Map && e['id'] != null) {
-                      final id = e['id'].toString();
-                      if (!groupById.containsKey(id)) {
-                        groupById[id] = Map<String, dynamic>.from(e);
-                        existingOrder.add(id);
-                      }
-                    }
-                  }
-                  final merged = [
-                    for (final id in existingOrder) groupById[id],
-                  ].whereType<Map<String, dynamic>>().toList();
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {}
-              } else if (key == 'provider_group_map_v1') {
-                // Merge provider->group mapping; prefer existing on conflicts
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingMap =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(existingStr) as Map<String, dynamic>);
-                  final newMap = (newStr == null || newStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(newStr) as Map<String, dynamic>);
-                  final merged = <String, dynamic>{...newMap, ...existingMap};
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {}
-              } else if (key == 'provider_group_collapsed_v1') {
-                // Merge collapse states; prefer existing on conflicts
-                try {
-                  final existingStr = (existing[key] ?? '') as String?;
-                  final newStr = (newValue ?? '') as String?;
-                  final existingMap =
-                      (existingStr == null || existingStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(existingStr) as Map<String, dynamic>);
-                  final newMap = (newStr == null || newStr.isEmpty)
-                      ? <String, dynamic>{}
-                      : (jsonDecode(newStr) as Map<String, dynamic>);
-                  final merged = <String, dynamic>{...newMap, ...existingMap};
-                  await prefs.restoreSingle(key, jsonEncode(merged));
-                } catch (_) {}
-              } else if ((key == 'providers_order_v1' ||
-                      key == 'search_services_v1') &&
-                  existing.containsKey(key)) {
-                // For these lists, prefer the imported version if different
-                // This ensures new providers/services are properly ordered
-                await prefs.restoreSingle(key, newValue);
-              } else {
-                // For new keys, add them
-                await prefs.restoreSingle(key, newValue);
-              }
-            } else if (!existing.containsKey(key)) {
-              // For non-mergeable keys, only add if not existing
-              await prefs.restoreSingle(key, newValue);
-            }
-            // Skip existing non-mergeable keys to preserve user preferences
+            await _mergeSetting(prefs, existing, entry.key, entry.value);
           }
         }
       } catch (_) {}
@@ -863,7 +693,7 @@ class DataSync {
                       Conversation.fromJson((e as Map).cast<String, dynamic>()),
                 )
                 .toList() ??
-            const <Conversation>[];
+            const [];
         final msgs =
             (obj['messages'] as List?)
                 ?.map(
@@ -871,7 +701,7 @@ class DataSync {
                       ChatMessage.fromJson((e as Map).cast<String, dynamic>()),
                 )
                 .toList() ??
-            const <ChatMessage>[];
+            const [];
         final toolEvents =
             ((obj['toolEvents'] as Map?) ?? const <String, dynamic>{}).map(
               (k, v) => MapEntry(
@@ -886,218 +716,344 @@ class DataSync {
             ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{})
                 .map((k, v) => MapEntry(k.toString(), v.toString()));
 
-        if (mode == RestoreMode.overwrite) {
-          // Clear and restore via ChatService
-          await chatService.clearAllData();
-          final byConv = <String, List<ChatMessage>>{};
-          for (final m in msgs) {
-            (byConv[m.conversationId] ??= <ChatMessage>[]).add(m);
-          }
-          for (final c in convs) {
-            final list = byConv[c.id] ?? const <ChatMessage>[];
-            await chatService.restoreConversation(c, list);
-          }
-          // Tool events
-          for (final entry in toolEvents.entries) {
-            try {
-              await chatService.setToolEvents(entry.key, entry.value);
-            } catch (_) {}
-          }
-          for (final entry in geminiThoughtSigs.entries) {
-            try {
-              await chatService.setGeminiThoughtSignature(
-                entry.key,
-                entry.value,
-              );
-            } catch (_) {}
-          }
-        } else {
-          // Merge mode: Add only non-existing conversations and messages
-          final existingConvs = chatService.getAllConversations();
-          final existingConvIds = existingConvs.map((c) => c.id).toSet();
-
-          // Create a map of message IDs to avoid duplicates
-          final existingMsgIds = <String>{};
-          for (final conv in existingConvs) {
-            final messages = chatService.getMessages(conv.id);
-            existingMsgIds.addAll(messages.map((m) => m.id));
-          }
-
-          // Group messages by conversation
-          final byConv = <String, List<ChatMessage>>{};
-          for (final m in msgs) {
-            if (!existingMsgIds.contains(m.id)) {
-              (byConv[m.conversationId] ??= <ChatMessage>[]).add(m);
-            }
-          }
-
-          // Restore non-existing conversations and their messages
-          for (final c in convs) {
-            if (!existingConvIds.contains(c.id)) {
-              final list = byConv[c.id] ?? const <ChatMessage>[];
-              await chatService.restoreConversation(c, list);
-            } else if (byConv.containsKey(c.id)) {
-              // Conversation exists but has new messages
-              final newMessages = byConv[c.id]!;
-              for (final msg in newMessages) {
-                await chatService.addMessageDirectly(c.id, msg);
-              }
-            }
-          }
-
-          // Merge tool events
-          for (final entry in toolEvents.entries) {
-            final existing = chatService.getToolEvents(entry.key);
-            if (existing.isEmpty) {
-              try {
-                await chatService.setToolEvents(entry.key, entry.value);
-              } catch (_) {}
-            }
-          }
-          for (final entry in geminiThoughtSigs.entries) {
-            final existingSig = chatService.getGeminiThoughtSignature(
-              entry.key,
-            );
-            if (existingSig == null || existingSig.isEmpty) {
-              try {
-                await chatService.setGeminiThoughtSignature(
-                  entry.key,
-                  entry.value,
-                );
-              } catch (_) {}
-            }
-          }
-        }
+        await _restoreChats(
+          convs,
+          msgs,
+          toolEvents,
+          geminiThoughtSigs,
+          overwrite: mode == RestoreMode.overwrite,
+        );
       } catch (_) {}
     }
 
     // Restore files
     if (cfg.includeFiles) {
-      if (mode == RestoreMode.overwrite) {
-        // Overwrite mode: Delete existing directories and copy all
-        // Restore upload directory
-        final uploadSrc = Directory(p.join(extractDir.path, 'upload'));
-        if (await uploadSrc.exists()) {
-          final dst = await _getUploadDir();
-          if (await dst.exists()) {
-            try {
-              await dst.delete(recursive: true);
-            } catch (_) {}
-          }
-          await dst.create(recursive: true);
-          for (final ent in uploadSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: uploadSrc.path);
-              final target = File(p.join(dst.path, rel));
-              await target.parent.create(recursive: true);
-              await ent.copy(target.path);
-            }
-          }
-        }
-
-        // Restore images directory
-        final imagesSrc = Directory(p.join(extractDir.path, 'images'));
-        if (await imagesSrc.exists()) {
-          final dst = await _getImagesDir();
-          if (await dst.exists()) {
-            try {
-              await dst.delete(recursive: true);
-            } catch (_) {}
-          }
-          await dst.create(recursive: true);
-          for (final ent in imagesSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: imagesSrc.path);
-              final target = File(p.join(dst.path, rel));
-              await target.parent.create(recursive: true);
-              await ent.copy(target.path);
-            }
-          }
-        }
-
-        // Restore avatars directory
-        final avatarsSrc = Directory(p.join(extractDir.path, 'avatars'));
-        if (await avatarsSrc.exists()) {
-          final dst = await _getAvatarsDir();
-          if (await dst.exists()) {
-            try {
-              await dst.delete(recursive: true);
-            } catch (_) {}
-          }
-          await dst.create(recursive: true);
-          for (final ent in avatarsSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: avatarsSrc.path);
-              final target = File(p.join(dst.path, rel));
-              await target.parent.create(recursive: true);
-              await ent.copy(target.path);
-            }
-          }
-        }
-      } else {
-        // Merge mode: Only copy non-existing files
-        // Merge upload directory
-        final uploadSrc = Directory(p.join(extractDir.path, 'upload'));
-        if (await uploadSrc.exists()) {
-          final dst = await _getUploadDir();
-          if (!await dst.exists()) {
-            await dst.create(recursive: true);
-          }
-          for (final ent in uploadSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: uploadSrc.path);
-              final target = File(p.join(dst.path, rel));
-              if (!await target.exists()) {
-                await target.parent.create(recursive: true);
-                await ent.copy(target.path);
-              }
-            }
-          }
-        }
-
-        // Merge images directory
-        final imagesSrc = Directory(p.join(extractDir.path, 'images'));
-        if (await imagesSrc.exists()) {
-          final dst = await _getImagesDir();
-          if (!await dst.exists()) {
-            await dst.create(recursive: true);
-          }
-          for (final ent in imagesSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: imagesSrc.path);
-              final target = File(p.join(dst.path, rel));
-              if (!await target.exists()) {
-                await target.parent.create(recursive: true);
-                await ent.copy(target.path);
-              }
-            }
-          }
-        }
-
-        // Merge avatars directory
-        final avatarsSrc = Directory(p.join(extractDir.path, 'avatars'));
-        if (await avatarsSrc.exists()) {
-          final dst = await _getAvatarsDir();
-          if (!await dst.exists()) {
-            await dst.create(recursive: true);
-          }
-          for (final ent in avatarsSrc.listSync(recursive: true)) {
-            if (ent is File) {
-              final rel = p.relative(ent.path, from: avatarsSrc.path);
-              final target = File(p.join(dst.path, rel));
-              if (!await target.exists()) {
-                await target.parent.create(recursive: true);
-                await ent.copy(target.path);
-              }
-            }
-          }
-        }
-      }
+      final isOverwrite = mode == RestoreMode.overwrite;
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'upload')),
+        await _getUploadDir(),
+        overwrite: isOverwrite,
+      );
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'images')),
+        await _getImagesDir(),
+        overwrite: isOverwrite,
+      );
+      await _restoreDirectory(
+        Directory(p.join(extractDir.path, 'avatars')),
+        await _getAvatarsDir(),
+        overwrite: isOverwrite,
+      );
     }
 
     try {
       await extractDir.delete(recursive: true);
     } catch (_) {}
+  }
+
+  // Helper to reuse merge logic
+  Future<void> _mergeSetting(
+    SharedPreferencesAsync prefs,
+    Map<String, dynamic> existing,
+    String key,
+    dynamic newValue,
+  ) async {
+    // Keys that should be merged as JSON arrays/objects
+    const mergeableKeys = {
+      'assistants_v1',
+      'provider_configs_v1',
+      'pinned_models_v1',
+      'providers_order_v1',
+      'provider_groups_v1',
+      'provider_group_map_v1',
+      'provider_group_collapsed_v1',
+      'search_services_v1',
+      'assistant_tags_v1',
+      'assistant_tag_map_v1',
+      'assistant_tag_collapsed_v1',
+    };
+
+    if (mergeableKeys.contains(key)) {
+      if (key == 'assistants_v1' && existing.containsKey(key)) {
+        try {
+          final existingAssistants =
+              jsonDecode(existing[key] as String) as List;
+          final newAssistants = jsonDecode(newValue as String) as List;
+          final assistantMap = <String, Map<String, dynamic>>{};
+          for (final a in existingAssistants) {
+            if (a is Map && a.containsKey('id')) {
+              assistantMap[a['id'].toString()] = Map<String, dynamic>.from(a);
+            }
+          }
+          for (final a in newAssistants) {
+            if (a is Map && a.containsKey('id')) {
+              final id = a['id'].toString();
+              final incoming = Map<String, dynamic>.from(a);
+              if (!assistantMap.containsKey(id)) {
+                assistantMap[id] = incoming;
+                continue;
+              }
+              final local = assistantMap[id]!;
+              final merged = <String, dynamic>{...local, ...incoming};
+              final localAvatar = (local['avatar'] ?? '').toString();
+              final incomingAvatar = (incoming['avatar'] ?? '');
+              if (localAvatar.trim().isNotEmpty) {
+                merged['avatar'] = localAvatar;
+              } else {
+                final avatar = incomingAvatar is String
+                    ? incomingAvatar
+                    : incomingAvatar?.toString();
+                merged['avatar'] = avatar == null || avatar.trim().isEmpty
+                    ? null
+                    : avatar;
+              }
+              final localBg = (local['background'] ?? '').toString();
+              final incomingBg = (incoming['background'] ?? '');
+              if (localBg.trim().isNotEmpty) {
+                merged['background'] = localBg;
+              } else {
+                final background = incomingBg is String
+                    ? incomingBg
+                    : incomingBg?.toString();
+                merged['background'] =
+                    background == null || background.trim().isEmpty
+                    ? null
+                    : background;
+              }
+
+              assistantMap[id] = merged;
+            }
+          }
+          await prefs.restoreSingle(
+            key,
+            jsonEncode(assistantMap.values.toList()),
+          );
+        } catch (_) {}
+      } else if (key == 'provider_configs_v1' && existing.containsKey(key)) {
+        try {
+          final existingConfigs =
+              jsonDecode(existing[key] as String) as Map<String, dynamic>;
+          final newConfigs =
+              jsonDecode(newValue as String) as Map<String, dynamic>;
+          final mergedConfigs = {...existingConfigs, ...newConfigs};
+          await prefs.restoreSingle(key, jsonEncode(mergedConfigs));
+        } catch (_) {}
+      } else if (key == 'pinned_models_v1' && existing.containsKey(key)) {
+        try {
+          final existingModels = jsonDecode(existing[key] as String) as List;
+          final newModels = jsonDecode(newValue as String) as List;
+          final modelSet = <String>{};
+          for (final m in existingModels) if (m is String) modelSet.add(m);
+          for (final m in newModels) if (m is String) modelSet.add(m);
+          await prefs.restoreSingle(key, jsonEncode(modelSet.toList()));
+        } catch (_) {}
+      } else if (key == 'assistant_tags_v1') {
+        try {
+          final existingStr = (existing[key] ?? '') as String?;
+          final newStr = (newValue ?? '') as String?;
+          final existingList = existingStr == null || existingStr.isEmpty
+              ? <dynamic>[]
+              : jsonDecode(existingStr) as List;
+          final newList = newStr == null || newStr.isEmpty
+              ? <dynamic>[]
+              : jsonDecode(newStr) as List;
+          final tagById = <String, Map<String, dynamic>>{};
+          final order = <String>[];
+          for (final e in existingList) {
+            if (e is Map && e['id'] != null) {
+              final id = e['id'].toString();
+              tagById[id] = Map<String, dynamic>.from(e);
+              order.add(id);
+            }
+          }
+          for (final e in newList) {
+            if (e is Map && e['id'] != null) {
+              final id = e['id'].toString();
+              if (!tagById.containsKey(id)) {
+                tagById[id] = Map<String, dynamic>.from(e);
+                order.add(id);
+              }
+            }
+          }
+          final merged = [
+            for (final id in order) tagById[id],
+          ].whereType<Map<String, dynamic>>().toList();
+          await prefs.restoreSingle(key, jsonEncode(merged));
+        } catch (_) {}
+      } else if (key == 'assistant_tag_map_v1' ||
+          key == 'assistant_tag_collapsed_v1') {
+        try {
+          final existingStr = (existing[key] ?? '') as String?;
+          final newStr = (newValue ?? '') as String?;
+          final existingMap = existingStr == null || existingStr.isEmpty
+              ? <String, dynamic>{}
+              : jsonDecode(existingStr) as Map<String, dynamic>;
+          final newMap = newStr == null || newStr.isEmpty
+              ? <String, dynamic>{}
+              : jsonDecode(newStr) as Map<String, dynamic>;
+          final merged = <String, dynamic>{...newMap, ...existingMap};
+          await prefs.restoreSingle(key, jsonEncode(merged));
+        } catch (_) {}
+      } else if (key == 'provider_groups_v1') {
+        try {
+          final existingStr = (existing[key] ?? '') as String?;
+          final newStr = (newValue ?? '') as String?;
+          final existingList = existingStr == null || existingStr.isEmpty
+              ? <dynamic>[]
+              : jsonDecode(existingStr) as List;
+          final newList = newStr == null || newStr.isEmpty
+              ? <dynamic>[]
+              : jsonDecode(newStr) as List;
+          final groupById = <String, Map<String, dynamic>>{};
+          final order = <String>[];
+          for (final e in existingList) {
+            if (e is Map && e['id'] != null) {
+              final id = e['id'].toString();
+              groupById[id] = Map<String, dynamic>.from(e);
+              order.add(id);
+            }
+          }
+          for (final e in newList) {
+            if (e is Map && e['id'] != null) {
+              final id = e['id'].toString();
+              if (!groupById.containsKey(id)) {
+                groupById[id] = Map<String, dynamic>.from(e);
+                order.add(id);
+              }
+            }
+          }
+          final merged = [
+            for (final id in order) groupById[id],
+          ].whereType<Map<String, dynamic>>().toList();
+          await prefs.restoreSingle(key, jsonEncode(merged));
+        } catch (_) {}
+      } else if (key == 'provider_group_map_v1' ||
+          key == 'provider_group_collapsed_v1') {
+        try {
+          final existingStr = (existing[key] ?? '') as String?;
+          final newStr = (newValue ?? '') as String?;
+          final existingMap = existingStr == null || existingStr.isEmpty
+              ? <String, dynamic>{}
+              : jsonDecode(existingStr) as Map<String, dynamic>;
+          final newMap = newStr == null || newStr.isEmpty
+              ? <String, dynamic>{}
+              : jsonDecode(newStr) as Map<String, dynamic>;
+          final merged = <String, dynamic>{...newMap, ...existingMap};
+          await prefs.restoreSingle(key, jsonEncode(merged));
+        } catch (_) {}
+      } else if ((key == 'providers_order_v1' || key == 'search_services_v1') &&
+          existing.containsKey(key)) {
+        // Prefer imported order
+        await prefs.restoreSingle(key, newValue);
+      } else {
+        await prefs.restoreSingle(key, newValue);
+      }
+    } else if (!existing.containsKey(key)) {
+      // Non-mergeable: only add if missing
+      await prefs.restoreSingle(key, newValue);
+    }
+  }
+
+  // Helper for chats restore logic
+  Future<void> _restoreChats(
+    List<Conversation> convs,
+    List<ChatMessage> msgs,
+    Map<String, List<Map<String, dynamic>>> toolEvents,
+    Map<String, String> geminiThoughtSigs, {
+    required bool overwrite,
+  }) async {
+    if (overwrite) {
+      await chatService.clearAllData();
+      final byConv = <String, List<ChatMessage>>{};
+      for (final m in msgs) {
+        (byConv[m.conversationId] ??= []).add(m);
+      }
+      for (final c in convs) {
+        await chatService.restoreConversation(c, byConv[c.id] ?? []);
+      }
+      for (final e in toolEvents.entries) {
+        try {
+          await chatService.setToolEvents(e.key, e.value);
+        } catch (_) {}
+      }
+      for (final e in geminiThoughtSigs.entries) {
+        try {
+          await chatService.setGeminiThoughtSignature(e.key, e.value);
+        } catch (_) {}
+      }
+    } else {
+      final existingConvs = chatService.getAllConversations();
+      final existingConvIds = existingConvs.map((c) => c.id).toSet();
+      final existingMsgIds = <String>{};
+      for (final c in existingConvs)
+        existingMsgIds.addAll(chatService.getMessages(c.id).map((m) => m.id));
+
+      final byConv = <String, List<ChatMessage>>{};
+      for (final m in msgs) {
+        if (!existingMsgIds.contains(m.id))
+          (byConv[m.conversationId] ??= []).add(m);
+      }
+
+      for (final c in convs) {
+        if (!existingConvIds.contains(c.id)) {
+          await chatService.restoreConversation(c, byConv[c.id] ?? []);
+        } else if (byConv.containsKey(c.id)) {
+          for (final msg in byConv[c.id]!)
+            await chatService.addMessageDirectly(c.id, msg);
+        }
+      }
+      for (final e in toolEvents.entries) {
+        if (chatService.getToolEvents(e.key).isEmpty)
+          try {
+            await chatService.setToolEvents(e.key, e.value);
+          } catch (_) {}
+      }
+      for (final e in geminiThoughtSigs.entries) {
+        if (chatService.getGeminiThoughtSignature(e.key) == null)
+          try {
+            await chatService.setGeminiThoughtSignature(e.key, e.value);
+          } catch (_) {}
+      }
+    }
+  }
+
+  // Helper for file/directory restore logic
+  Future<void> _restoreDirectory(
+    Directory src,
+    Directory dst, {
+    required bool overwrite,
+  }) async {
+    if (!await src.exists()) return;
+
+    if (overwrite) {
+      if (await dst.exists()) {
+        try {
+          await dst.delete(recursive: true);
+        } catch (_) {}
+      }
+      await dst.create(recursive: true);
+      for (final ent in src.listSync(recursive: true)) {
+        if (ent is File) {
+          final rel = p.relative(ent.path, from: src.path);
+          final target = File(p.join(dst.path, rel));
+          await target.parent.create(recursive: true);
+          await ent.copy(target.path);
+        }
+      }
+    } else {
+      // Merge: only copy if not exists
+      if (!await dst.exists()) await dst.create(recursive: true);
+      for (final ent in src.listSync(recursive: true)) {
+        if (ent is File) {
+          final rel = p.relative(ent.path, from: src.path);
+          final target = File(p.join(dst.path, rel));
+          if (!await target.exists()) {
+            await target.parent.create(recursive: true);
+            await ent.copy(target.path);
+          }
+        }
+      }
+    }
   }
 }
 

@@ -108,6 +108,7 @@ class S3BackupProvider extends ChangeNotifier {
 
   Future<void> restoreFromItem(
     BackupFileItem item, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
     _busy = true;
@@ -122,6 +123,7 @@ class S3BackupProvider extends ChangeNotifier {
       await _dataSync.restoreFromLocalFile(
         file,
         _scopeAsWebdavConfig(),
+        options: options,
         mode: mode,
       );
       try {
