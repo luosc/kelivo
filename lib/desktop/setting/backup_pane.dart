@@ -201,17 +201,17 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
     s3BackupProvider.updateConfig(cfg);
   }
 
-  Future<void> _chooseRestoreModeAndRun(
-    Future<void> Function(RestoreMode) action,
+  Future<void> _chooseRestoreOptionsAndRun(
+    Future<void> Function(RestoreOptions) action,
   ) async {
     final rootCtx = Navigator.of(context, rootNavigator: true).context;
-    final mode = await showDialog<RestoreMode>(
+    final options = await showDialog<RestoreOptions>(
       context: context,
-      builder: (ctx) => _RestoreModeDialog(),
+      builder: (ctx) => const _RestoreOptionsDialog(),
     );
-    if (mode == null) return;
+    if (options == null) return;
     try {
-      await action(mode);
+      await action(options);
     } catch (e) {
       if (!rootCtx.mounted) return;
       showAppSnackBar(
@@ -510,10 +510,10 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                                       title:
                                           '${l10n.backupPageRemoteBackups} (WebDAV)',
                                       listRemote: backupProvider.listRemote,
-                                      restoreFromItem: (it, mode) async {
+                                      restoreFromItem: (it, options) async {
                                         await backupProvider.restoreFromItem(
                                           it,
-                                          mode: mode,
+                                          options: options,
                                         );
                                         final msg = backupProvider.message;
                                         if (msg != null && msg != 'Restored') {
@@ -776,10 +776,10 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                                       title:
                                           '${l10n.backupPageRemoteBackups} (S3)',
                                       listRemote: s3BackupProvider.listRemote,
-                                      restoreFromItem: (it, mode) async {
+                                      restoreFromItem: (it, options) async {
                                         await s3BackupProvider.restoreFromItem(
                                           it,
-                                          mode: mode,
+                                          options: options,
                                         );
                                         final msg = s3BackupProvider.message;
                                         if (msg != null && msg != 'Restored') {
@@ -901,8 +901,11 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                   final path = result?.files.single.path;
                   if (path == null) return;
                   final f = File(path);
-                  await _chooseRestoreModeAndRun((mode) async {
-                    await backupProvider.restoreFromLocalFile(f, mode: mode);
+                  await _chooseRestoreOptionsAndRun((options) async {
+                    await backupProvider.restoreFromLocalFile(
+                      f,
+                      options: options,
+                    );
                   });
                 },
               ),
@@ -923,18 +926,20 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                   if (path == null) return;
                   final f = File(path);
                   if (!context.mounted) return;
-                  final mode = await showDialog<RestoreMode>(
+                  final options = await showDialog<RestoreOptions>(
                     context: context,
-                    builder: (_) => _RestoreModeDialog(),
+                    builder: (_) => const _RestoreOptionsDialog(),
                   );
-                  if (mode == null) return;
+                  if (options == null) return;
                   if (!context.mounted) return;
                   final settings = context.read<SettingsProvider>();
                   final chat = context.read<ChatService>();
                   try {
                     await CherryImporter.importFromCherryStudio(
                       file: f,
-                      mode: mode,
+                      mode: options.isFullOverwrite
+                          ? RestoreMode.overwrite
+                          : RestoreMode.merge,
                       settings: settings,
                       chatService: chat,
                     );
@@ -999,18 +1004,20 @@ class _DesktopBackupPaneState extends State<DesktopBackupPane> {
                   if (path == null) return;
                   final f = File(path);
                   if (!context.mounted) return;
-                  final mode = await showDialog<RestoreMode>(
+                  final options = await showDialog<RestoreOptions>(
                     context: context,
-                    builder: (_) => _RestoreModeDialog(),
+                    builder: (_) => const _RestoreOptionsDialog(),
                   );
-                  if (mode == null) return;
+                  if (options == null) return;
                   if (!context.mounted) return;
                   final settings = context.read<SettingsProvider>();
                   final chat = context.read<ChatService>();
                   try {
                     final res = await ChatboxImporter.importFromChatbox(
                       file: f,
-                      mode: mode,
+                      mode: options.isFullOverwrite
+                          ? RestoreMode.overwrite
+                          : RestoreMode.merge,
                       settings: settings,
                       chatService: chat,
                     );
@@ -1351,7 +1358,7 @@ class _RemoteBackupsDialog extends StatefulWidget {
 
   final String title;
   final Future<List<BackupFileItem>> Function() listRemote;
-  final Future<void> Function(BackupFileItem item, RestoreMode mode)
+  final Future<void> Function(BackupFileItem item, RestoreOptions options)
   restoreFromItem;
   final Future<List<BackupFileItem>> Function(BackupFileItem item)
   deleteAndReload;
@@ -1408,20 +1415,20 @@ class _RemoteBackupsDialogState extends State<_RemoteBackupsDialog> {
     }
   }
 
-  Future<void> _chooseRestoreModeAndRun(
-    Future<void> Function(RestoreMode) action,
+  Future<void> _chooseRestoreOptionsAndRun(
+    Future<void> Function(RestoreOptions) action,
   ) async {
     // Use a stable context so we can still show a restart prompt even if this
     // dialog is closed while the restore task is running.
     final rootCtx = Navigator.of(context, rootNavigator: true).context;
-    final mode = await showDialog<RestoreMode>(
+    final options = await showDialog<RestoreOptions>(
       context: context,
-      builder: (_) => _RestoreModeDialog(),
+      builder: (_) => const _RestoreOptionsDialog(),
     );
-    if (mode == null) return;
+    if (options == null) return;
     setState(() => _loading = true);
     try {
-      await action(mode);
+      await action(options);
     } catch (e) {
       if (!rootCtx.mounted) return;
       showAppSnackBar(
@@ -1526,8 +1533,8 @@ class _RemoteBackupsDialogState extends State<_RemoteBackupsDialog> {
                             return _RemoteItemCard(
                               item: it,
                               onRestore: () =>
-                                  _chooseRestoreModeAndRun((mode) async {
-                                    await widget.restoreFromItem(it, mode);
+                                  _chooseRestoreOptionsAndRun((options) async {
+                                    await widget.restoreFromItem(it, options);
                                   }),
                               onDelete: () async {
                                 final confirm = await showDialog<bool>(
@@ -1607,7 +1614,7 @@ void _showRemoteBackupsDialog(
   BuildContext context, {
   required String title,
   required Future<List<BackupFileItem>> Function() listRemote,
-  required Future<void> Function(BackupFileItem item, RestoreMode mode)
+  required Future<void> Function(BackupFileItem item, RestoreOptions options)
   restoreFromItem,
   required Future<List<BackupFileItem>> Function(BackupFileItem item)
   deleteAndReload,
@@ -1661,18 +1668,31 @@ class _ItemRow extends StatelessWidget {
   }
 }
 
-class _RestoreModeDialog extends StatelessWidget {
+class _RestoreOptionsDialog extends StatefulWidget {
+  const _RestoreOptionsDialog();
+
+  @override
+  State<_RestoreOptionsDialog> createState() => _RestoreOptionsDialogState();
+}
+
+class _RestoreOptionsDialogState extends State<_RestoreOptionsDialog> {
+  RestoreAction _settings = RestoreAction.merge;
+  RestoreAction _providers = RestoreAction.merge;
+  RestoreAction _chats = RestoreAction.merge;
+  RestoreAction _files = RestoreAction.merge;
+
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context)!;
+    final cs = Theme.of(context).colorScheme;
+
     return Dialog(
       backgroundColor: cs.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 320, maxWidth: 420),
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1680,37 +1700,75 @@ class _RestoreModeDialog extends StatelessWidget {
               Text(
                 l10n.backupPageSelectImportMode,
                 style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: AppFontWeights.emphasis,
+                  fontSize: 17,
+                  fontWeight: AppFontWeights.semibold,
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               Text(
                 l10n.backupPageSelectImportModeDescription,
                 style: TextStyle(
-                  fontSize: 13,
-                  color: cs.onSurface.withValues(alpha: 0.8),
+                  fontSize: 14,
+                  color: cs.onSurface.withValues(alpha: 0.7),
                 ),
               ),
-              const SizedBox(height: 12),
-              _RestoreModeTile(
-                title: l10n.backupPageOverwriteMode,
-                subtitle: l10n.backupPageOverwriteModeDescription,
-                onTap: () => Navigator.of(context).pop(RestoreMode.overwrite),
-              ),
-              const SizedBox(height: 8),
-              _RestoreModeTile(
-                title: l10n.backupPageMergeMode,
-                subtitle: l10n.backupPageMergeModeDescription,
-                onTap: () => Navigator.of(context).pop(RestoreMode.merge),
+              const SizedBox(height: 20),
+              _OptionRow(
+                icon: lucide.Lucide.Settings,
+                label: l10n.settingsPageTitle,
+                value: _settings,
+                onChanged: (v) => setState(() => _settings = v),
+                l10n: l10n,
               ),
               const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(l10n.backupPageCancel),
-                ),
+              _OptionRow(
+                icon: lucide.Lucide.Cpu,
+                label: l10n.providersPageTitle,
+                value: _providers,
+                onChanged: (v) => setState(() => _providers = v),
+                l10n: l10n,
+              ),
+              const SizedBox(height: 12),
+              _OptionRow(
+                icon: lucide.Lucide.MessageSquare,
+                label: l10n.backupPageChatsLabel,
+                value: _chats,
+                onChanged: (v) => setState(() => _chats = v),
+                l10n: l10n,
+              ),
+              const SizedBox(height: 12),
+              _OptionRow(
+                icon: lucide.Lucide.FileText,
+                label: l10n.backupPageFilesLabel,
+                value: _files,
+                onChanged: (v) => setState(() => _files = v),
+                l10n: l10n,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(l10n.backupPageCancel),
+                  ),
+                  const SizedBox(width: 8),
+                  _DeskIosButton(
+                    label: l10n.backupPageOK,
+                    filled: true,
+                    dense: false,
+                    onTap: () {
+                      Navigator.of(context).pop(
+                        RestoreOptions(
+                          settingsAction: _settings,
+                          providersAction: _providers,
+                          chatsAction: _chats,
+                          filesAction: _files,
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
             ],
           ),
@@ -1720,73 +1778,179 @@ class _RestoreModeDialog extends StatelessWidget {
   }
 }
 
-class _RestoreModeTile extends StatefulWidget {
-  const _RestoreModeTile({
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
+class _OptionRow extends StatelessWidget {
+  const _OptionRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    required this.l10n,
   });
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  @override
-  State<_RestoreModeTile> createState() => _RestoreModeTileState();
-}
 
-class _RestoreModeTileState extends State<_RestoreModeTile> {
-  bool _hover = false;
-  bool _pressed = false;
+  final IconData icon;
+  final String label;
+  final RestoreAction value;
+  final ValueChanged<RestoreAction> onChanged;
+  final AppLocalizations l10n;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = _hover
-        ? (isDark
-              ? Colors.white.withValues(alpha: 0.06)
-              : Colors.black.withValues(alpha: 0.04))
-        : Colors.transparent;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTap: widget.onTap,
-        child: AnimatedScale(
-          scale: _pressed ? 0.98 : 1.0,
-          duration: const Duration(milliseconds: 100),
-          curve: Curves.easeOutCubic,
-          child: Container(
-            padding: const EdgeInsets.all(12),
+    final isChecked = value != RestoreAction.ignore;
+
+    return Row(
+      children: [
+        _TactileScale(
+          onTap: () {
+            onChanged(isChecked ? RestoreAction.ignore : RestoreAction.merge);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 20,
+            height: 20,
             decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(12),
+              color: isChecked ? cs.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: cs.outlineVariant.withValues(alpha: 0.12),
-                width: 0.6,
+                color: isChecked
+                    ? cs.primary
+                    : cs.outline.withValues(alpha: 0.5),
+                width: 2,
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.title,
-                  style: TextStyle(fontWeight: AppFontWeights.emphasis),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  widget.subtitle,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: cs.onSurface.withValues(alpha: 0.8),
-                  ),
-                ),
-              ],
+            child: isChecked
+                ? Icon(lucide.Lucide.Check, size: 14, color: cs.onPrimary)
+                : null,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Icon(
+          icon,
+          size: 18,
+          color: cs.onSurface.withValues(alpha: isChecked ? 0.9 : 0.5),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: AppFontWeights.medium,
+              color: cs.onSurface.withValues(alpha: isChecked ? 0.9 : 0.5),
             ),
           ),
         ),
+        if (isChecked)
+          _ActionSelector(value: value, onChanged: onChanged, l10n: l10n),
+      ],
+    );
+  }
+}
+
+class _ActionSelector extends StatelessWidget {
+  const _ActionSelector({
+    required this.value,
+    required this.onChanged,
+    required this.l10n,
+  });
+
+  final RestoreAction value;
+  final ValueChanged<RestoreAction> onChanged;
+  final AppLocalizations l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isOverwrite = value == RestoreAction.overwrite;
+
+    return Container(
+      height: 26,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _Segment(
+            label: l10n.backupPageMergeMode,
+            selected: !isOverwrite,
+            onTap: () => onChanged(RestoreAction.merge),
+          ),
+          Container(
+            width: 1,
+            height: 14,
+            color: cs.outline.withValues(alpha: 0.2),
+          ),
+          _Segment(
+            label: l10n.backupPageOverwriteMode,
+            selected: isOverwrite,
+            onTap: () => onChanged(RestoreAction.overwrite),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Segment extends StatelessWidget {
+  const _Segment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected
+                ? AppFontWeights.semibold
+                : AppFontWeights.regular,
+            color: selected ? cs.primary : cs.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TactileScale extends StatefulWidget {
+  const _TactileScale({required this.child, required this.onTap});
+
+  final Widget child;
+  final VoidCallback onTap;
+
+  @override
+  State<_TactileScale> createState() => _TactileScaleState();
+}
+
+class _TactileScaleState extends State<_TactileScale> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _pressed ? 0.9 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        child: widget.child,
       ),
     );
   }

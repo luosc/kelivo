@@ -505,6 +505,7 @@ class DataSync {
   Future<void> restoreFromWebDav(
     WebDavConfig cfg,
     BackupFileItem item, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
     // Stream the download to a file instead of buffering in memory.
@@ -523,7 +524,7 @@ class DataSync {
       file = File(p.join(tmpDir.path, item.displayName));
       final sink = file.openWrite();
       await streamed.stream.pipe(sink);
-      await _restoreFromBackupFile(file, cfg, mode: mode);
+      await _restoreFromBackupFile(file, cfg, options: options, mode: mode);
     } finally {
       client.close();
       await _deleteFileQuietly(file);
@@ -547,10 +548,11 @@ class DataSync {
   Future<void> restoreFromLocalFile(
     File file,
     WebDavConfig cfg, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
     if (!await file.exists()) throw Exception('备份文件不存在');
-    await _restoreFromBackupFile(file, cfg, mode: mode);
+    await _restoreFromBackupFile(file, cfg, options: options, mode: mode);
   }
 
   // ===== Internal helpers =====
@@ -667,8 +669,10 @@ class DataSync {
   Future<void> _restoreFromBackupFile(
     File file,
     WebDavConfig cfg, {
+    RestoreOptions? options,
     RestoreMode mode = RestoreMode.overwrite,
   }) async {
+    final restoreOptions = options ?? RestoreOptions.fromMode(mode);
     // Extract to temp using file-stream decoding to avoid loading the full ZIP
     // into RAM (the old approach called file.readAsBytes() which for a 600-800 MB
     // file would allocate a contiguous byte array of the same size).
@@ -691,7 +695,8 @@ class DataSync {
           final txt = await settingsFile.readAsString();
           final map = jsonDecode(txt) as Map<String, dynamic>;
           final prefs = await SharedPreferencesAsync.instance;
-          if (mode == RestoreMode.overwrite) {
+          if (restoreOptions.settingsAction == RestoreAction.overwrite &&
+              restoreOptions.providersAction == RestoreAction.overwrite) {
             // For overwrite mode, restore all settings
             await prefs.restore(map);
           } else {
@@ -714,10 +719,35 @@ class DataSync {
               'assistant_tag_map_v1', // assistantId -> tagId
               'assistant_tag_collapsed_v1', // tagId -> bool
             };
+            const providerKeys = {
+              'assistants_v1',
+              'assistant_memories_v1',
+              'provider_configs_v1',
+              'pinned_models_v1',
+              'providers_order_v1',
+              'mcp_servers_v1',
+              'provider_groups_v1',
+              'provider_group_map_v1',
+              'provider_group_collapsed_v1',
+              'search_services_v1',
+              'assistant_tags_v1',
+              'assistant_tag_map_v1',
+              'assistant_tag_collapsed_v1',
+            };
 
             for (final entry in map.entries) {
               final key = entry.key;
               final newValue = entry.value;
+              final action = providerKeys.contains(key)
+                  ? restoreOptions.providersAction
+                  : restoreOptions.settingsAction;
+              if (action == RestoreAction.ignore) {
+                continue;
+              }
+              if (action == RestoreAction.overwrite) {
+                await prefs.restoreSingle(key, newValue);
+                continue;
+              }
 
               if (mergeableKeys.contains(key)) {
                 // Special handling for mergeable configurations
@@ -1025,7 +1055,9 @@ class DataSync {
 
       // Restore chats
       final chatsFile = File(p.join(extractDir.path, 'chats.json'));
-      if (cfg.includeChats && await chatsFile.exists()) {
+      if (restoreOptions.chatsAction != RestoreAction.ignore &&
+          cfg.includeChats &&
+          await chatsFile.exists()) {
         try {
           final obj =
               jsonDecode(await chatsFile.readAsString())
@@ -1062,7 +1094,7 @@ class DataSync {
               ((obj['geminiThoughtSigs'] as Map?) ?? const <String, dynamic>{})
                   .map((k, v) => MapEntry(k.toString(), v.toString()));
 
-          if (mode == RestoreMode.overwrite) {
+          if (restoreOptions.chatsAction == RestoreAction.overwrite) {
             // Clear and restore via ChatService
             await chatService.clearAllData();
             final byConv = <String, List<ChatMessage>>{};
@@ -1148,8 +1180,9 @@ class DataSync {
       }
 
       // Restore files
-      if (cfg.includeFiles) {
-        if (mode == RestoreMode.overwrite) {
+      if (restoreOptions.filesAction != RestoreAction.ignore &&
+          cfg.includeFiles) {
+        if (restoreOptions.filesAction == RestoreAction.overwrite) {
           // Overwrite mode: Delete existing directories and copy all
           // Restore upload directory
           final uploadSrc = Directory(p.join(extractDir.path, 'upload'));
