@@ -13,11 +13,9 @@ class BackupProvider extends ChangeNotifier {
   bool _busy = false;
   String? _message;
 
-  BackupProvider({
-    required ChatService chatService,
-    WebDavConfig? initialConfig,
-  }) : _dataSync = DataSync(chatService: chatService),
-       _cfg = initialConfig ?? const WebDavConfig();
+  BackupProvider({required ChatService chatService, WebDavConfig? initialConfig})
+      : _dataSync = DataSync(chatService: chatService),
+        _cfg = initialConfig ?? const WebDavConfig();
 
   WebDavConfig get config => _cfg;
   bool get busy => _busy;
@@ -29,51 +27,34 @@ class BackupProvider extends ChangeNotifier {
   }
 
   Future<void> test() async {
-    _busy = true;
-    _message = null;
-    notifyListeners();
+    _busy = true; _message = null; notifyListeners();
     try {
       await _dataSync.testWebdav(_cfg);
       _message = 'OK';
     } catch (e) {
       _message = e.toString();
     } finally {
-      _busy = false;
-      notifyListeners();
+      _busy = false; notifyListeners();
     }
   }
 
   Future<void> backup() async {
-    _busy = true;
-    _message = null;
-    notifyListeners();
+    _busy = true; _message = null; notifyListeners();
     try {
       await _dataSync.backupToWebDav(_cfg);
       _message = 'Backup uploaded';
     } catch (e) {
       _message = e.toString();
     } finally {
-      _busy = false;
-      notifyListeners();
+      _busy = false; notifyListeners();
     }
   }
 
-  Future<void> restoreFromItem(
-    BackupFileItem item, {
-    RestoreMode mode = RestoreMode.overwrite,
-  }) async {
-    _busy = true;
-    _message = null;
-    notifyListeners();
-    try {
-      await _dataSync.restoreFromWebDav(_cfg, item, mode: mode);
-      _message = 'Restored';
-    } catch (e) {
-      _message = e.toString();
-    } finally {
-      _busy = false;
-      notifyListeners();
-    }
+  Future<void> restoreFromItem(BackupFileItem item, {RestoreOptions? options, RestoreMode mode = RestoreMode.overwrite}) async {
+    _busy = true; _message = null; notifyListeners();
+    try { await _dataSync.restoreFromWebDav(_cfg, item, options: options, mode: mode); _message = 'Restored'; }
+    catch (e) { _message = e.toString(); }
+    finally { _busy = false; notifyListeners(); }
   }
 
   Future<List<BackupFileItem>> listRemote() async {
@@ -86,8 +67,6 @@ class BackupProvider extends ChangeNotifier {
   }
 
   Future<File> exportToFile() => _dataSync.exportToFile(_cfg);
-  Future<void> restoreFromLocalFile(
-    File file, {
-    RestoreMode mode = RestoreMode.overwrite,
-  }) => _dataSync.restoreFromLocalFile(file, _cfg, mode: mode);
+  Future<void> restoreFromLocalFile(File file, {RestoreOptions? options, RestoreMode mode = RestoreMode.overwrite}) => _dataSync.restoreFromLocalFile(file, _cfg, options: options, mode: mode);
 }
+

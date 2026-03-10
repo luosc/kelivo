@@ -162,4 +162,5 @@ class Lucide {
   static const IconData CornerDownLeft = lucide.LucideIcons.cornerDownLeft;
   static const IconData package2 = lucide.LucideIcons.package2;
   static const IconData workflow = lucide.LucideIcons.workflow;
+  static const IconData Cpu = lucide.LucideIcons.cpu;
 }
