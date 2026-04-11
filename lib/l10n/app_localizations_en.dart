@@ -753,6 +753,26 @@ class AppLocalizationsEn extends AppLocalizations {
       'Camera unavailable: permission not granted.';
 
   @override
+  String get voiceInputPermissionDeniedMessage =>
+      'Microphone unavailable: permission not granted.';
+
+  @override
+  String get voiceRecordingStartFailed => 'Couldn\'t start recording.';
+
+  @override
+  String voiceRecordingLinuxDependencyMissing(Object dependencies) {
+    return 'Linux voice input requires $dependencies. Install them and try again.';
+  }
+
+  @override
+  String get voiceRecordingStopFailed => 'Couldn\'t process the recording.';
+
+  @override
+  String voiceRecordingDisplayLabel(Object duration) {
+    return 'User voice ($duration)';
+  }
+
+  @override
   String get openSystemSettings => 'Open Settings';
 
   @override
@@ -1591,6 +1611,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String chatMessageWidgetVoicePlaybackFailed(String error) {
+    return 'Failed to play voice message: $error';
+  }
+
+  @override
   String get chatMessageWidgetCopiedToClipboard => 'Copied to clipboard';
 
   @override
@@ -2061,6 +2086,48 @@ class AppLocalizationsEn extends AppLocalizations {
   String get verbosityHigh => 'High';
 
   @override
+  String get chatInputBarVoiceInputTooltip => 'Record Voice';
+
+  @override
+  String get chatInputBarVoiceRecordingTooltip => 'Stop Recording';
+
+  @override
+  String chatInputBarDesktopVoiceCountdownLabel(int seconds) {
+    return 'Recording starts in ${seconds}s';
+  }
+
+  @override
+  String get chatInputBarDesktopVoiceCountdownHelp =>
+      'Kelivo will start recording automatically after the countdown.';
+
+  @override
+  String chatInputBarDesktopVoiceRecordingLabel(Object duration) {
+    return 'Recording... $duration';
+  }
+
+  @override
+  String chatInputBarDesktopVoiceRecordingHelp(Object shortcut) {
+    return 'Click Stop, or release $shortcut to finish recording.';
+  }
+
+  @override
+  String get chatInputBarDesktopVoiceConfirmLabel =>
+      'Send this voice recording?';
+
+  @override
+  String get chatInputBarDesktopVoiceConfirmHelp =>
+      'Press Enter to send, or press Esc to cancel.';
+
+  @override
+  String get chatInputBarDesktopVoiceStopButton => 'Stop Recording';
+
+  @override
+  String get chatInputBarDesktopVoiceSendButton => 'Send Recording';
+
+  @override
+  String get chatInputBarDesktopVoiceCancelButton => 'Cancel';
+
+  @override
   String get chatInputBarMoreTooltip => 'Add';
 
   @override
@@ -2434,6 +2501,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get modelDetailSheetImageMode => 'Image';
+
+  @override
+  String get modelDetailSheetAudioMode => 'Audio';
 
   @override
   String get modelDetailSheetToolsAbility => 'Tools';

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io' show File;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:provider/provider.dart';
@@ -50,6 +52,7 @@ import '../widgets/message_list_view.dart';
 import '../widgets/chat_input_section.dart';
 import '../widgets/chat_selection_app_bar.dart';
 import '../widgets/chat_selection_export_bar.dart';
+import '../utils/desktop_voice_input_utils.dart';
 import '../utils/model_display_helper.dart';
 import '../utils/chat_layout_constants.dart';
 import '../controllers/home_page_controller.dart';
@@ -84,6 +87,7 @@ class _HomePageState extends State<HomePage>
   final GlobalKey _selectionMiniMapKey = GlobalKey();
   final GlobalKey _selectionExportBarKey = GlobalKey();
   StreamSubscription<String>? _processTextSub;
+  bool _desktopVoiceShortcutPressed = false;
 
   // ============================================================================
   // Page Controller (manages all business logic and state)
@@ -137,6 +141,9 @@ class _HomePageState extends State<HomePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _desktopVoiceShortcutPressed = false;
+    }
     _controller.onAppLifecycleStateChanged(state);
   }
 
@@ -156,6 +163,7 @@ class _HomePageState extends State<HomePage>
       WidgetsBinding.instance.removeObserver(this);
     } catch (_) {}
     _processTextSub?.cancel();
+    _mediaController.cancelDesktopVoiceSession();
     _controller.removeListener(_onControllerChanged);
     _drawerController.removeListener(_onDrawerValueChanged);
     _inputFocus.dispose();
@@ -179,6 +187,56 @@ class _HomePageState extends State<HomePage>
         _assistantPickerCloseTick.value++;
       }
     }
+  }
+
+  KeyEventResult _handleDesktopVoiceHotkey(FocusNode node, KeyEvent event) {
+    final platform = defaultTargetPlatform;
+    if (!supportsDesktopVoiceInputPlatform(platform)) {
+      return KeyEventResult.ignored;
+    }
+
+    final key = event.logicalKey;
+    final isDown = event is KeyDownEvent || event is KeyRepeatEvent;
+    final trackedKeys = desktopVoiceHotkeyTrackedKeys(platform);
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    final isShortcutDown = isDesktopVoiceHotkeyDown(
+      platform: platform,
+      eventKey: key,
+      pressedKeys: keys,
+      isDown: isDown,
+    );
+
+    if (isShortcutDown && !_desktopVoiceShortcutPressed) {
+      _desktopVoiceShortcutPressed = true;
+      _mediaController.startDesktopVoiceHotkeyRecording();
+      return KeyEventResult.handled;
+    }
+
+    if (_desktopVoiceShortcutPressed && isDown && trackedKeys.contains(key)) {
+      return KeyEventResult.handled;
+    }
+
+    if (_desktopVoiceShortcutPressed &&
+        event is KeyUpEvent &&
+        trackedKeys.contains(key)) {
+      _desktopVoiceShortcutPressed = false;
+      _mediaController.finishDesktopVoiceHotkeyRecording();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  Widget _wrapWithDesktopVoiceHotkeyFocus(Widget child) {
+    if (!supportsDesktopVoiceInputPlatform(defaultTargetPlatform)) {
+      return child;
+    }
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _handleDesktopVoiceHotkey,
+      child: child,
+    );
   }
 
   void _initProcessText() {
@@ -487,7 +545,9 @@ class _HomePageState extends State<HomePage>
               onInvertSelection: _controller.invertSelection,
             )
           : null,
-      body: _wrapWithDropTarget(_buildTabletBody(context, cs)),
+      body: _wrapWithDesktopVoiceHotkeyFocus(
+        _wrapWithDropTarget(_buildTabletBody(context, cs)),
+      ),
     );
   }
 
@@ -754,6 +814,8 @@ class _HomePageState extends State<HomePage>
         isProcessingFiles: _controller.isProcessingFiles,
         scrollController: _scrollController,
         observerController: _controller.scrollCtrl.observerController,
+        allowUserScroll:
+            !PlatformUtils.isMobile || !_controller.isVoiceRecording,
         messages: _controller.chatController.collapsedMessages,
         byGroup: _controller.chatController.groupedMessages,
         versionSelections: _controller.versionSelections,
@@ -815,8 +877,10 @@ class _HomePageState extends State<HomePage>
       isLoading: _controller.isCurrentConversationLoading,
       isToolModel: _controller.isToolModel,
       isReasoningModel: _controller.isReasoningModel,
+      supportsAudioInput: _controller.supportsAudioInput,
       isReasoningEnabled: _controller.isReasoningEnabled,
       isVerbosityModel: _controller.supportsVerbosity,
+      voiceRecording: _controller.isVoiceRecording,
       onMore: _toggleTools,
       onSelectModel: () => showModelSelectSheet(context),
       onLongPressSelectModel: () {
@@ -918,6 +982,9 @@ class _HomePageState extends State<HomePage>
       onPickCamera: _controller.onPickCamera,
       onPickPhotos: _controller.onPickPhotos,
       onUploadFiles: _controller.onPickFiles,
+      onStartVoiceRecording: _controller.startVoiceRecording,
+      onStopVoiceRecording: _controller.stopVoiceRecording,
+      onCancelVoiceRecording: _controller.cancelVoiceRecording,
       onToggleLearningMode: _openInstructionInjectionPopover,
       onOpenWorldBook: _openWorldBookPopover,
       onLongPressLearning: _showLearningPromptSheet,

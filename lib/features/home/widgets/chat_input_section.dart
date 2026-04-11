@@ -11,6 +11,7 @@ import '../../../core/providers/instruction_injection_provider.dart';
 import '../../../core/providers/world_book_provider.dart';
 import '../../../core/services/api/builtin_tools.dart';
 import '../utils/model_display_helper.dart';
+import '../utils/desktop_voice_input_utils.dart';
 import 'chat_input_bar.dart';
 import 'model_icon.dart';
 
@@ -22,7 +23,11 @@ typedef IsReasoningModelCallback =
     bool Function(String providerKey, String modelId);
 
 /// Callback for checking if a model supports verbosity.
-typedef IsVerbosityModelCallback = bool Function(String providerKey, String modelId);
+typedef IsVerbosityModelCallback =
+    bool Function(String providerKey, String modelId);
+
+typedef SupportsAudioInputCallback =
+    bool Function(String providerKey, String modelId);
 
 /// Callback for checking if reasoning is enabled.
 typedef IsReasoningEnabledCallback = bool Function(int? budget);
@@ -42,8 +47,10 @@ class ChatInputSection extends StatelessWidget {
     required this.isLoading,
     required this.isToolModel,
     required this.isReasoningModel,
+    required this.supportsAudioInput,
     required this.isReasoningEnabled,
     this.isVerbosityModel,
+    this.voiceRecording = false,
     this.onMore,
     this.onSelectModel,
     this.onLongPressSelectModel,
@@ -64,6 +71,9 @@ class ChatInputSection extends StatelessWidget {
     this.onPickCamera,
     this.onPickPhotos,
     this.onUploadFiles,
+    this.onStartVoiceRecording,
+    this.onStopVoiceRecording,
+    this.onCancelVoiceRecording,
     this.onToggleLearningMode,
     this.onOpenWorldBook, // 新增世界书支持桌面端
     this.onLongPressLearning,
@@ -77,10 +87,12 @@ class ChatInputSection extends StatelessWidget {
   final ChatInputBarController mediaController;
   final bool isTablet;
   final bool isLoading;
+  final bool voiceRecording;
 
   // Model capability checkers
   final IsToolModelCallback isToolModel;
   final IsReasoningModelCallback isReasoningModel;
+  final SupportsAudioInputCallback supportsAudioInput;
   final IsReasoningEnabledCallback isReasoningEnabled;
   final IsVerbosityModelCallback? isVerbosityModel;
 
@@ -105,6 +117,9 @@ class ChatInputSection extends StatelessWidget {
   final VoidCallback? onPickCamera;
   final VoidCallback? onPickPhotos;
   final VoidCallback? onUploadFiles;
+  final Future<bool> Function()? onStartVoiceRecording;
+  final Future<DocumentAttachment?> Function()? onStopVoiceRecording;
+  final Future<void> Function()? onCancelVoiceRecording;
   final VoidCallback? onToggleLearningMode;
   final VoidCallback? onOpenWorldBook;
   final VoidCallback? onLongPressLearning;
@@ -132,6 +147,12 @@ class ChatInputSection extends StatelessWidget {
     final isDesktop = _isDesktopPlatform(context);
     final hasWorldBooks =
         isTablet && context.watch<WorldBookProvider>().books.isNotEmpty;
+    final canUseVoiceInput =
+        pk != null &&
+        mid != null &&
+        supportsAudioInput(pk, mid) &&
+        (!isDesktop ||
+            supportsDesktopVoiceInputPlatform(Theme.of(context).platform));
 
     return ChatInputBar(
       key: inputBarKey,
@@ -159,7 +180,9 @@ class ChatInputSection extends StatelessWidget {
       mediaController: mediaController,
       onConfigureReasoning: onConfigureReasoning,
       onConfigureVerbosity: onConfigureVerbosity,
-      supportsVerbosity: (pk != null && mid != null && isVerbosityModel != null) ? isVerbosityModel!(pk, mid) : false,
+      supportsVerbosity: (pk != null && mid != null && isVerbosityModel != null)
+          ? isVerbosityModel!(pk, mid)
+          : false,
       verbosityActive: (() {
         final v = (a?.verbosity) ?? settings.verbosity;
         return v != null && v != 'medium';
@@ -202,6 +225,13 @@ class ChatInputSection extends StatelessWidget {
       onPickCamera: isTablet ? (isDesktop ? null : onPickCamera) : null,
       onPickPhotos: isTablet ? (isDesktop ? null : onPickPhotos) : null,
       onUploadFiles: isTablet ? onUploadFiles : null,
+      showVoiceInputButton: canUseVoiceInput,
+      voiceRecording: !isDesktop && onStopVoiceRecording != null
+          ? voiceRecording
+          : false,
+      onStartVoiceRecording: canUseVoiceInput ? onStartVoiceRecording : null,
+      onStopVoiceRecording: canUseVoiceInput ? onStopVoiceRecording : null,
+      onCancelVoiceRecording: canUseVoiceInput ? onCancelVoiceRecording : null,
       onToggleLearningMode: isTablet ? onToggleLearningMode : null,
       onOpenWorldBook: hasWorldBooks ? onOpenWorldBook : null,
       onLongPressLearning: isTablet ? onLongPressLearning : null,
