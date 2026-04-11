@@ -40,6 +40,7 @@ import '../services/ask_user_interaction_service.dart';
 import '../services/ocr_service.dart';
 import '../services/translation_service.dart';
 import '../services/file_upload_service.dart';
+import '../services/voice_input_service.dart';
 import '../widgets/chat_input_bar.dart';
 import '../../model/widgets/model_select_sheet.dart';
 
@@ -133,6 +134,7 @@ class HomePageController extends ChangeNotifier {
   late OcrService _ocrService;
   late TranslationService _translationService;
   late FileUploadService _fileUploadService;
+  late VoiceInputService _voiceInputService;
   late scroll_ctrl.ChatScrollController _scrollCtrl;
 
   McpProvider? _mcpProvider;
@@ -165,6 +167,8 @@ class HomePageController extends ChangeNotifier {
 
   // Desktop drag-and-drop
   bool _isDragHovering = false;
+
+  bool _isVoiceRecording = false;
 
   // App lifecycle (currently unused but kept for future notification logic)
   // ignore: unused_field
@@ -220,6 +224,7 @@ class HomePageController extends ChangeNotifier {
   bool get showThinkingTools => _showThinkingTools;
   bool get showThinkingContent => _showThinkingContent;
   bool get isDragHovering => _isDragHovering;
+  bool get isVoiceRecording => _isVoiceRecording;
   bool get tabletSidebarOpen => _tabletSidebarOpen;
   bool get rightSidebarOpen => _rightSidebarOpen;
   double get embeddedSidebarWidth => _embeddedSidebarWidth;
@@ -339,6 +344,7 @@ class HomePageController extends ChangeNotifier {
       getContext: () => _context,
       mediaController: _mediaController,
     );
+    _voiceInputService = VoiceInputService(getContext: () => _context);
     _messageBuilderService = MessageBuilderService(
       chatService: _chatService,
       contextProvider: _context,
@@ -527,6 +533,9 @@ class HomePageController extends ChangeNotifier {
           break;
         case ChatAction.exitGlobalSearch:
           exitGlobalSearchMode(clearQuery: true);
+          break;
+        case ChatAction.cancelTransientUi:
+          _mediaController.cancelDesktopVoiceSession();
           break;
       }
     });
@@ -1776,6 +1785,31 @@ class HomePageController extends ChangeNotifier {
   Future<void> onFilesDroppedDesktop(List<XFile> files) =>
       _fileUploadService.onFilesDroppedDesktop(files);
 
+  Future<bool> startVoiceRecording() async {
+    if (_isVoiceRecording) return true;
+    final started = await _voiceInputService.startRecording();
+    if (started) {
+      _isVoiceRecording = true;
+      notifyListeners();
+    }
+    return started;
+  }
+
+  Future<DocumentAttachment?> stopVoiceRecording() async {
+    if (!_isVoiceRecording) return null;
+    final attachment = await _voiceInputService.stopRecording();
+    _isVoiceRecording = false;
+    notifyListeners();
+    return attachment;
+  }
+
+  Future<void> cancelVoiceRecording() async {
+    if (!_isVoiceRecording) return;
+    await _voiceInputService.cancelRecording();
+    _isVoiceRecording = false;
+    notifyListeners();
+  }
+
   // ============================================================================
   // Public Methods - Scroll
   // ============================================================================
@@ -1858,6 +1892,14 @@ class HomePageController extends ChangeNotifier {
     return _generationController.isToolModel(providerKey, modelId);
   }
 
+  bool supportsAudioInput(String providerKey, String modelId) {
+    return _messageGenerationService.supportsAudioAttachmentsForProvider(
+      _context.read<SettingsProvider>(),
+      providerKey: providerKey,
+      modelId: modelId,
+    );
+  }
+
   bool isReasoningEnabled(int? budget) {
     if (budget == null) return true;
     if (budget == -1) return true;
@@ -1918,6 +1960,9 @@ class HomePageController extends ChangeNotifier {
 
   void onAppLifecycleStateChanged(AppLifecycleState state) {
     _appInForeground = (state == AppLifecycleState.resumed);
+    if (state != AppLifecycleState.resumed && isDesktopPlatform) {
+      _mediaController.cancelDesktopVoiceSession();
+    }
   }
 
   void onDidPopNext() {
@@ -2043,6 +2088,9 @@ class HomePageController extends ChangeNotifier {
     _scrollCtrl.dispose();
     try {
       _chatActionSub?.cancel();
+    } catch (_) {}
+    try {
+      unawaited(_voiceInputService.dispose());
     } catch (_) {}
     _chatController.dispose();
     _streamController.dispose();

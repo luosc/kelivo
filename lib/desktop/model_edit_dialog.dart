@@ -87,6 +87,16 @@ enum _TabKind { basic, advanced, tools }
 
 class _ModelEditDialogBodyState extends State<_ModelEditDialogBody>
     with SingleTickerProviderStateMixin {
+  static const List<Modality> _inputModeOrder = <Modality>[
+    Modality.text,
+    Modality.image,
+    Modality.audio,
+  ];
+  static const List<Modality> _outputModeOrder = <Modality>[
+    Modality.text,
+    Modality.image,
+  ];
+
   late final TabController _tabCtrl;
   _TabKind _tab = _TabKind.basic;
 
@@ -262,10 +272,7 @@ class _ModelEditDialogBodyState extends State<_ModelEditDialogBody>
     _cachedEmbeddingInput = result.cachedEmbeddingInput;
   }
 
-  void _toggleModality(Set<Modality> modalities, int index) {
-    const modalityOrder = <Modality>[Modality.text, Modality.image];
-    if (index < 0 || index >= modalityOrder.length) return;
-    final mod = modalityOrder[index];
+  void _toggleModality(Set<Modality> modalities, Modality mod) {
     if (modalities.contains(mod)) {
       modalities.remove(mod);
       if (modalities.isEmpty) modalities.add(Modality.text);
@@ -567,12 +574,15 @@ class _ModelEditDialogBodyState extends State<_ModelEditDialogBody>
               options: [
                 l10n.modelDetailSheetTextMode,
                 l10n.modelDetailSheetImageMode,
+                l10n.modelDetailSheetAudioMode,
               ],
               isSelected: [
                 _input.contains(Modality.text),
                 _input.contains(Modality.image),
+                _input.contains(Modality.audio),
               ],
-              onChanged: (idx) => setState(() => _toggleModality(_input, idx)),
+              onChanged: (idx) =>
+                  setState(() => _toggleModality(_input, _inputModeOrder[idx])),
             ),
             if (_type == ModelType.chat) ...[
               const SizedBox(height: 12),
@@ -587,8 +597,9 @@ class _ModelEditDialogBodyState extends State<_ModelEditDialogBody>
                   _output.contains(Modality.text),
                   _output.contains(Modality.image),
                 ],
-                onChanged: (idx) =>
-                    setState(() => _toggleModality(_output, idx)),
+                onChanged: (idx) => setState(
+                  () => _toggleModality(_output, _outputModeOrder[idx]),
+                ),
               ),
               const SizedBox(height: 12),
               _label(context, l10n.modelDetailSheetAbilitiesLabel),
@@ -883,13 +894,8 @@ class _ModelEditDialogBodyState extends State<_ModelEditDialogBody>
       'apiModelId': apiModelId,
       'name': _nameCtrl.text.trim(),
       'type': _type == ModelType.chat ? 'chat' : 'embedding',
-      'input': _input
-          .map((e) => e == Modality.image ? 'image' : 'text')
-          .toList(),
-      if (!isEmbedding)
-        'output': _output
-            .map((e) => e == Modality.image ? 'image' : 'text')
-            .toList(),
+      'input': _input.map((e) => e.storageValue).toList(),
+      if (!isEmbedding) 'output': _output.map((e) => e.storageValue).toList(),
       if (!isEmbedding)
         'abilities': _abilities
             .map((e) => e == ModelAbility.reasoning ? 'reasoning' : 'tool')

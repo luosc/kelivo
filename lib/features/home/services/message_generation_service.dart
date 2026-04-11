@@ -166,6 +166,14 @@ class MessageGenerationService {
 
     // Inject prompts
     messageBuilderService.injectSystemPrompt(apiMessages, assistant, modelId);
+    if (_shouldIncludeAudioForProvider(
+          settings,
+          providerKey: providerKey,
+          modelId: modelId,
+        ) &&
+        apiMessagesContainAudioMediaPaths(apiMessages)) {
+      messageBuilderService.injectGeminiAudioInputPrompt(apiMessages);
+    }
     await messageBuilderService.injectMemoryAndRecentChats(
       apiMessages,
       assistant,
@@ -486,7 +494,7 @@ class MessageGenerationService {
   }) {
     final cfg = settings.getProviderConfig(providerKey);
     if (ProviderConfig.classify(providerKey, explicitType: cfg.providerType) !=
-        ProviderKind.openai) {
+        ProviderKind.google) {
       return false;
     }
     final override = ModelOverridePayloadParser.modelOverride(
@@ -494,7 +502,7 @@ class MessageGenerationService {
       modelId,
     );
     final upstreamModelId = resolveApiModelIdOverride(override, modelId);
-    return isLongCatOmniModelId(upstreamModelId);
+    return supportsGeminiNativeAudioInputModelId(upstreamModelId);
   }
 
   bool supportsAudioAttachmentsForProvider(
@@ -532,6 +540,18 @@ class MessageGenerationService {
         (attachment) => isAudioMime(_effectiveAttachmentMime(attachment)),
       )) {
         return true;
+      }
+    }
+    return false;
+  }
+
+  bool apiMessagesContainAudioMediaPaths(List<Map<String, dynamic>> messages) {
+    for (final message in messages) {
+      final mediaPaths = message[MessageBuilderService.internalMediaPathsKey];
+      if (mediaPaths is! List) continue;
+      for (final path in mediaPaths) {
+        final mime = inferMediaMimeFromSource(path.toString());
+        if (isAudioMime(mime)) return true;
       }
     }
     return false;

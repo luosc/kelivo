@@ -25,6 +25,7 @@ import 'package:intl/intl.dart';
 import '../../../utils/sandbox_path_resolver.dart';
 import '../../../utils/avatar_cache.dart';
 import '../../../utils/assistant_regex.dart';
+import '../../../utils/voice_attachment_utils.dart';
 import '../../../core/models/assistant.dart';
 import '../../../core/providers/tts_provider.dart';
 import '../../../shared/widgets/markdown_with_highlight.dart';
@@ -36,6 +37,7 @@ import '../../../core/providers/model_provider.dart';
 import '../../../core/models/assistant_regex.dart';
 import '../../../shared/widgets/ios_checkbox.dart';
 import '../../../shared/widgets/ios_tactile.dart';
+import '../../../core/providers/voice_message_playback_provider.dart';
 import '../../../desktop/desktop_context_menu.dart';
 import '../../../desktop/menu_anchor.dart';
 import '../../../shared/widgets/emoji_text.dart';
@@ -999,6 +1001,95 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget> {
     return displayName;
   }
 
+  String _voicePlaybackIdForPath(String path) {
+    return '${widget.message.id}:$path';
+  }
+
+  Future<void> _handleDocumentAttachmentTap(_DocRef docRef) async {
+    if (isVoiceRecordingFileName(docRef.fileName)) {
+      await _toggleVoiceAttachmentPlayback(docRef);
+      return;
+    }
+    await _openDocumentAttachment(docRef);
+  }
+
+  Future<void> _toggleVoiceAttachmentPlayback(_DocRef docRef) async {
+    final l10n = AppLocalizations.of(context)!;
+    final fixedPath = SandboxPathResolver.fix(docRef.path);
+    final playbackId = _voicePlaybackIdForPath(fixedPath);
+    final playback = context.read<VoiceMessagePlaybackProvider>();
+    final ttsProvider = context.read<TtsProvider>();
+    final fallbackDuration = tryParseVoiceRecordingDuration(docRef.fileName);
+
+    if (playback.isPlayingItem(playbackId)) {
+      await playback.stop();
+      return;
+    }
+
+    final file = File(fixedPath);
+    if (!await file.exists()) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        message: l10n.chatMessageWidgetFileNotFound(docRef.fileName),
+        type: NotificationType.error,
+      );
+      return;
+    }
+
+    try {
+      await playback.toggle(
+        playbackId: playbackId,
+        path: fixedPath,
+        fallbackDuration: fallbackDuration,
+        beforePlay: ttsProvider.stop,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        message: l10n.chatMessageWidgetVoicePlaybackFailed(e.toString()),
+        type: NotificationType.error,
+      );
+    }
+  }
+
+  Future<void> _openDocumentAttachment(_DocRef docRef) async {
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      final fixed = SandboxPathResolver.fix(docRef.path);
+      final file = File(fixed);
+      if (!(await file.exists())) {
+        if (!mounted) return;
+        showAppSnackBar(
+          context,
+          message: l10n.chatMessageWidgetFileNotFound(docRef.fileName),
+          type: NotificationType.error,
+        );
+        return;
+      }
+      final res = await OpenFilex.open(fixed, type: docRef.mime);
+      if (res.type != ResultType.done) {
+        if (!mounted) return;
+        final openMessage = res.message;
+        showAppSnackBar(
+          context,
+          message: l10n.chatMessageWidgetCannotOpenFile(
+            openMessage.isNotEmpty ? openMessage : res.type.toString(),
+          ),
+          type: NotificationType.error,
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        message: l10n.chatMessageWidgetOpenFileError(e.toString()),
+        type: NotificationType.error,
+      );
+    }
+  }
+
   @override
   void dispose() {
     try {
@@ -1696,69 +1787,76 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget> {
     if (parsed.docs.isNotEmpty) {
       docItems.addAll(
         parsed.docs.map((d) {
+          final isVoice = isVoiceRecordingFileName(d.fileName);
+          final fixedPath = SandboxPathResolver.fix(d.path);
+          final voicePlaybackId = _voicePlaybackIdForPath(fixedPath);
+          final voiceDuration =
+              tryParseVoiceRecordingDuration(d.fileName) ?? Duration.zero;
+          final voicePlaybackState = isVoice
+              ? context.select<
+                  VoiceMessagePlaybackProvider,
+                  ({bool isPlaying, double progress, Duration? remaining})
+                >(
+                  (provider) => (
+                    isPlaying: provider.isPlayingItem(voicePlaybackId),
+                    progress: provider.progressFor(voicePlaybackId),
+                    remaining: provider.remainingFor(voicePlaybackId),
+                  ),
+                )
+              : (isPlaying: false, progress: 0.0, remaining: null);
+          final isPlayingVoice = voicePlaybackState.isPlaying;
+          final displayedVoiceDuration = isPlayingVoice
+              ? (voicePlaybackState.remaining ?? voiceDuration)
+              : voiceDuration;
+          final borderRadius = BorderRadius.circular(isVoice ? 18 : 10);
+          final baseColor = isVoice
+              ? cs.primary.withValues(
+                  alpha: isPlayingVoice
+                      ? (isDark ? 0.36 : 0.24)
+                      : (isDark ? 0.28 : 0.18),
+                )
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : cs.surface.withValues(alpha: 0.92));
+
           return IosCardPress(
-            baseColor: isDark
-                ? Colors.white.withValues(alpha: 0.08)
-                : cs.surface.withValues(alpha: 0.92),
+            baseColor: baseColor,
             pressedScale: 0.99,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: borderRadius,
             border: Border.all(
               color: cs.outlineVariant.withValues(alpha: 0.18),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            onTap: () async {
-              try {
-                final fixed = SandboxPathResolver.fix(d.path);
-                final f = File(fixed);
-                if (!(await f.exists())) {
-                  if (!context.mounted) return;
-                  showAppSnackBar(
-                    context,
-                    message: l10n.chatMessageWidgetFileNotFound(d.fileName),
-                    type: NotificationType.error,
-                  );
-                  return;
-                }
-                final res = await OpenFilex.open(fixed, type: d.mime);
-                if (res.type != ResultType.done) {
-                  if (!context.mounted) return;
-                  final openMessage = res.message;
-                  showAppSnackBar(
-                    context,
-                    message: l10n.chatMessageWidgetCannotOpenFile(
-                      openMessage.isNotEmpty
-                          ? openMessage
-                          : res.type.toString(),
-                    ),
-                    type: NotificationType.error,
-                  );
-                }
-              } catch (e) {
-                if (!context.mounted) return;
-                showAppSnackBar(
-                  context,
-                  message: l10n.chatMessageWidgetOpenFileError(e.toString()),
-                  type: NotificationType.error,
-                );
-              }
-            },
+            onTap: () => _handleDocumentAttachmentTap(d),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.insert_drive_file,
+                  isVoice
+                      ? (isPlayingVoice ? Lucide.CircleStop : Lucide.AudioLines)
+                      : Icons.insert_drive_file,
                   size: 16,
-                  color: cs.onSurface.withValues(alpha: 0.72),
+                  color: isVoice
+                      ? cs.primary
+                      : cs.onSurface.withValues(alpha: 0.72),
                 ),
                 const SizedBox(width: 6),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 180),
                   child: Text(
-                    d.fileName,
+                    isVoice
+                        ? voiceRecordingDisplayLabelForDuration(
+                            l10n,
+                            displayedVoiceDuration,
+                          )
+                        : d.fileName,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,
-                      color: cs.onSurface.withValues(alpha: 0.86),
+                      color: isVoice
+                          ? (isDark ? Colors.white : cs.primary)
+                          : cs.onSurface.withValues(alpha: 0.86),
+                      fontWeight: isVoice ? FontWeight.w600 : null,
                     ),
                   ),
                 ),
@@ -2450,7 +2548,7 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget> {
             switchOutCurve: Curves.easeInCubic,
             transitionBuilder: (child, anim) => SizeTransition(
               sizeFactor: anim,
-              alignment: const AlignmentDirectional(-1.0, -1.0),
+              axisAlignment: -1.0,
               child: FadeTransition(opacity: anim, child: child),
             ),
             child: widget.message.isStreaming

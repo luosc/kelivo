@@ -87,6 +87,7 @@ class MessageListView extends StatefulWidget {
     super.key,
     required this.scrollController,
     required this.observerController,
+    this.allowUserScroll = true,
     required this.messages,
     required this.byGroup,
     required this.versionSelections,
@@ -134,6 +135,7 @@ class MessageListView extends StatefulWidget {
 
   final ScrollController scrollController;
   final ListObserverController observerController;
+  final bool allowUserScroll;
 
   /// Pre-collapsed messages (from ChatController.collapsedMessages).
   final List<ChatMessage> messages;
@@ -281,6 +283,9 @@ class _MessageListViewState extends State<MessageListView> {
           builder: (context, isProcessing, child) {
             final list = ListView.builder(
               controller: widget.scrollController,
+              physics: widget.allowUserScroll
+                  ? null
+                  : const NeverScrollableScrollPhysics(),
               padding: EdgeInsets.fromLTRB(
                 horizontalPad,
                 widget.topContentPadding,

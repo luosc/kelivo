@@ -8,6 +8,7 @@ import '../services/network/dio_http_client.dart';
 import '../services/api_key_manager.dart';
 import '../services/api/provider_request_headers.dart';
 import '../services/model_override_payload_parser.dart';
+import '../utils/multimodal_input_utils.dart';
 import 'package:Kelivo/secrets/fallback.dart';
 import '../services/api/google_service_account_auth.dart';
 import '../models/model_types.dart';
@@ -47,6 +48,10 @@ class ModelRegistry {
             r'mimo-v2'
             r')')
         .replaceAll(' ', ''),
+    caseSensitive: false,
+  );
+  static final RegExp audioInput = RegExp(
+    r'(whisper-1|gpt-4o-mini-transcribe|gpt-4o-transcribe)',
     caseSensitive: false,
   );
 
@@ -106,6 +111,12 @@ class ModelRegistry {
     }
     if (vision.hasMatch(id)) {
       if (!inMods.contains(Modality.image)) inMods.add(Modality.image);
+    }
+    if ((supportsGeminiNativeAudioInputModelId(id) ||
+            isLongCatOmniModelId(id) ||
+            audioInput.hasMatch(id)) &&
+        !inMods.contains(Modality.audio)) {
+      inMods.add(Modality.audio);
     }
     if (tool.hasMatch(id) && !ab.contains(ModelAbility.tool)) {
       ab.add(ModelAbility.tool);
