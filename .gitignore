@@ -1,4 +1,6 @@
 # Miscellaneous
+.vscode/
+plans/
 *.class
 *.log
 *.pyc
