@@ -1,4 +1,6 @@
 # Miscellaneous
+.vscode/
+plans/
 *.class
 *.log
 *.pyc
@@ -59,6 +61,7 @@ internationalization.md
 /desiredFileName.txt
 /lib/secrets/fallback.dart
 .claude/settings.local.json
+/.opencode/
 /.codex/
 /.agent/
 /.agents/
