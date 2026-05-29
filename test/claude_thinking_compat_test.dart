@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:Kelivo/core/providers/settings_provider.dart';
 import 'package:Kelivo/core/services/api/builtin_tools.dart';
+import 'package:Kelivo/core/services/api/claude_message_transformer.dart';
 import 'package:Kelivo/core/services/api/chat_api_service.dart';
 
 ProviderConfig _claudeConfig(
@@ -852,6 +853,166 @@ data: {"type":"message_stop"}
         );
       },
     );
+
+    test(
+      'Claude tool history normalizer converts tool role to user tool_result',
+      () {
+        final normalized =
+            ClaudeMessageTransformer.normalizeToolHistoryMessages(const [
+              {'role': 'user', 'content': '查一下 Kelivo'},
+              {
+                'role': 'assistant',
+                'content': '\n\n',
+                'tool_calls': [
+                  {
+                    'id': 'toolu_1',
+                    'type': 'function',
+                    'function': {
+                      'name': 'lookup',
+                      'arguments': '{"query":"Kelivo"}',
+                    },
+                    'metadata': {
+                      'anthropic': {
+                        'assistant_blocks': [
+                          {
+                            'type': 'thinking',
+                            'thinking': '需要先查资料。',
+                            'signature': 'sig-claude-history',
+                          },
+                          {
+                            'type': 'tool_use',
+                            'id': 'toolu_1',
+                            'name': 'lookup',
+                            'input': {'query': 'Kelivo'},
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+              {
+                'role': 'tool',
+                'tool_call_id': 'toolu_1',
+                'name': 'lookup',
+                'content': '{"result":"ok"}',
+              },
+              {'role': 'user', 'content': '继续总结'},
+            ]);
+
+        expect(normalized.map((message) => message['role']).toList(), [
+          'user',
+          'assistant',
+          'user',
+          'user',
+        ]);
+        expect(normalized.any((message) => message['role'] == 'tool'), isFalse);
+
+        final assistantContent = (normalized[1]['content'] as List).cast<Map>();
+        final toolResultContent = (normalized[2]['content'] as List)
+            .cast<Map>();
+
+        expect(assistantContent[0]['type'], 'thinking');
+        expect(assistantContent[0]['signature'], 'sig-claude-history');
+        expect(assistantContent[1]['type'], 'tool_use');
+        expect(assistantContent[1]['id'], 'toolu_1');
+        expect(toolResultContent.single['type'], 'tool_result');
+        expect(toolResultContent.single['tool_use_id'], 'toolu_1');
+      },
+    );
+
+    test('Claude tool history normalizer batches adjacent tool results', () {
+      final normalized = ClaudeMessageTransformer.normalizeToolHistoryMessages(
+        const [
+          {
+            'role': 'assistant',
+            'content': '\n\n',
+            'tool_calls': [
+              {
+                'id': 'toolu_1',
+                'type': 'function',
+                'function': {
+                  'name': 'lookup',
+                  'arguments': '{"query":"Kelivo"}',
+                },
+              },
+              {
+                'id': 'toolu_2',
+                'type': 'function',
+                'function': {
+                  'name': 'lookup',
+                  'arguments': '{"query":"Claude"}',
+                },
+              },
+            ],
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_1',
+            'name': 'lookup',
+            'content': '{"result":"Kelivo ok"}',
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_2',
+            'name': 'lookup',
+            'content': '{"result":"Claude ok"}',
+          },
+        ],
+      );
+
+      expect(normalized.map((message) => message['role']).toList(), [
+        'assistant',
+        'user',
+      ]);
+
+      final assistantContent = (normalized[0]['content'] as List).cast<Map>();
+      final toolResultContent = (normalized[1]['content'] as List).cast<Map>();
+
+      expect(
+        assistantContent
+            .where((block) => block['type'] == 'tool_use')
+            .map((block) => block['id'])
+            .toList(),
+        ['toolu_1', 'toolu_2'],
+      );
+      expect(
+        toolResultContent
+            .where((block) => block['type'] == 'tool_result')
+            .map((block) => block['tool_use_id'])
+            .toList(),
+        ['toolu_1', 'toolu_2'],
+      );
+    });
+
+    test('Claude tool history normalizer tolerates invalid arguments JSON', () {
+      final normalized = ClaudeMessageTransformer.normalizeToolHistoryMessages(
+        const [
+          {
+            'role': 'assistant',
+            'content': '\n\n',
+            'tool_calls': [
+              {
+                'id': 'toolu_bad_args',
+                'type': 'function',
+                'function': {'name': 'lookup', 'arguments': '{"query":'},
+              },
+            ],
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_bad_args',
+            'name': 'lookup',
+            'content': '{"result":"ok"}',
+          },
+        ],
+      );
+
+      final assistantContent = (normalized[0]['content'] as List).cast<Map>();
+      expect(assistantContent.single['type'], 'tool_use');
+      expect(assistantContent.single['input'], <String, dynamic>{});
+      expect(normalized.any((message) => message['role'] == 'tool'), isFalse);
+    });
 
     test('history tool replay preserves thinking block signature', () async {
       late Map<String, dynamic> requestBody;

@@ -185,20 +185,21 @@ Stream<ChatStreamChunk> _sendGoogleVertexClaudeStream({
       }
       continue;
     }
-    nonSystemMessages.add({
-      'role': role.isEmpty ? 'user' : role,
-      'content': m['content'] ?? '',
-    });
+    nonSystemMessages.add(
+      Map<String, dynamic>.from(m)..['role'] = role.isEmpty ? 'user' : role,
+    );
   }
 
-  // Transform messages + images (Force Base64 for Vertex)
+  final normalizedMessages =
+      ClaudeMessageTransformer.normalizeToolHistoryMessages(nonSystemMessages);
+
+  // Transform images (Force Base64 for Vertex)
   final initialMessages = <Map<String, dynamic>>[];
-  for (int i = 0; i < nonSystemMessages.length; i++) {
-    final m = nonSystemMessages[i];
-    final isLast = i == nonSystemMessages.length - 1;
-    if (isLast &&
-        (userImagePaths?.isNotEmpty == true) &&
-        (m['role'] == 'user')) {
+  for (int i = 0; i < normalizedMessages.length; i++) {
+    final m = normalizedMessages[i];
+    final isLast = i == normalizedMessages.length - 1;
+    final role = (m['role'] ?? 'user').toString();
+    if (isLast && (userImagePaths?.isNotEmpty == true) && role == 'user') {
       final parts = <Map<String, dynamic>>[];
       final text = (m['content'] ?? '').toString();
       if (text.isNotEmpty) parts.add({'type': 'text', 'text': text});
@@ -249,10 +250,7 @@ Stream<ChatStreamChunk> _sendGoogleVertexClaudeStream({
       }
       initialMessages.add({'role': 'user', 'content': parts});
     } else {
-      initialMessages.add({
-        'role': m['role'] ?? 'user',
-        'content': m['content'] ?? '',
-      });
+      initialMessages.add({'role': role, 'content': m['content'] ?? ''});
     }
   }
 
