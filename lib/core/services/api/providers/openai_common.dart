@@ -733,6 +733,37 @@ Stream<String> _ensureTrailingNewline(Stream<String> source) async* {
   yield '\n';
 }
 
+const Duration _sseStreamStallTimeout = Duration(seconds: 90);
+
+Stream<String> _ensureTrailingNewlineWithTimeout(
+  Stream<String> source, {
+  required http.Client client,
+}) {
+  return _ensureTrailingNewline(source).timeout(
+    _sseStreamStallTimeout,
+    onTimeout: (sink) {
+      _abortStalledSseRequest(client);
+      sink.addError(
+        TimeoutException(
+          'SSE stream stalled: no data received for ${_sseStreamStallTimeout.inSeconds}s',
+          _sseStreamStallTimeout,
+        ),
+      );
+      sink.close();
+    },
+  );
+}
+
+void _abortStalledSseRequest(http.Client client) {
+  try {
+    if (client is DioHttpClient) {
+      client.abortActiveRequests('sse_stream_stalled');
+    } else {
+      client.close();
+    }
+  } catch (_) {}
+}
+
 class _OpenAIProviderInfo {
   final String host;
   final String providerId;
@@ -1741,7 +1772,10 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
   String? lastResponseId;
   String? finishReason;
 
-  await for (final chunk in _ensureTrailingNewline(sse)) {
+  await for (final chunk in _ensureTrailingNewlineWithTimeout(
+    sse,
+    client: client,
+  )) {
     buffer += chunk;
     final lines = buffer.split('\n');
     buffer = lines.last;
@@ -1963,7 +1997,10 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
             String contentAccum = ''; // Accumulate content for this round
             String reasoningAccum = '';
             dynamic reasoningDetailsAccum;
-            await for (final ch in _ensureTrailingNewline(s2)) {
+            await for (final ch in _ensureTrailingNewlineWithTimeout(
+              s2,
+              client: client,
+            )) {
               buf2 += ch;
               final lines2 = buf2.split('\n');
               buf2 = lines2.last;
@@ -2703,7 +2740,10 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                     <int, Map<String, String>>{};
                 List<Map<String, dynamic>> outItems2 =
                     const <Map<String, dynamic>>[];
-                await for (final ch in _ensureTrailingNewline(s2)) {
+                await for (final ch in _ensureTrailingNewlineWithTimeout(
+                  s2,
+                  client: client,
+                )) {
                   buf2 += ch;
                   final lines2 = buf2.split('\n');
                   buf2 = lines2.last;
@@ -3387,7 +3427,10 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
             String contentAccum = '';
             String reasoningAccum = '';
             dynamic reasoningDetailsAccum;
-            await for (final ch in _ensureTrailingNewline(s2)) {
+            await for (final ch in _ensureTrailingNewlineWithTimeout(
+              s2,
+              client: client,
+            )) {
               buf2 += ch;
               final lines2 = buf2.split('\n');
               buf2 = lines2.last;
@@ -3909,7 +3952,10 @@ Stream<ChatStreamChunk> _sendOpenAIStream(
                 String contentAccum = '';
                 String reasoningAccum = '';
                 dynamic reasoningDetailsAccum;
-                await for (final ch in _ensureTrailingNewline(s2)) {
+                await for (final ch in _ensureTrailingNewlineWithTimeout(
+                  s2,
+                  client: client,
+                )) {
                   buf2 += ch;
                   final lines2 = buf2.split('\n');
                   buf2 = lines2.last;

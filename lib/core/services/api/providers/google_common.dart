@@ -1135,7 +1135,10 @@ Stream<ChatStreamChunk> _sendGoogleStream(
       return sb.toString();
     }
 
-    await for (final chunk in _ensureTrailingNewline(sse)) {
+    await for (final chunk in _ensureTrailingNewlineWithTimeout(
+      sse,
+      client: client,
+    )) {
       buffer += chunk;
       final lines = buffer.split('\n');
       buffer = lines.last; // keep incomplete line

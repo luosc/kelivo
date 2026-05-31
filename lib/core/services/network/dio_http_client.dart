@@ -64,7 +64,7 @@ class DioHttpClient extends http.BaseClient {
       _cancelToken = cancelToken ?? CancelToken(),
       _dio = Dio(
         BaseOptions(
-          connectTimeout: null,
+          connectTimeout: const Duration(seconds: 30),
           sendTimeout: null,
           receiveTimeout: null,
           validateStatus: (_) => true,
@@ -73,8 +73,8 @@ class DioHttpClient extends http.BaseClient {
     _dio.httpClientAdapter = IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
-        client.connectionTimeout = null;
-        client.idleTimeout = const Duration(days: 3650);
+        client.connectionTimeout = const Duration(seconds: 30);
+        client.idleTimeout = const Duration(seconds: 90);
         if (_proxy?.isValid == true) {
           final p = _proxy!;
           if (p.type == 'socks5') {
@@ -134,6 +134,35 @@ class DioHttpClient extends http.BaseClient {
   final Dio _dio;
   final NetworkProxyConfig? _proxy;
   final CancelToken _cancelToken;
+  final Set<StreamSubscription<List<int>>> _activeBodySubscriptions =
+      <StreamSubscription<List<int>>>{};
+  final Set<StreamController<List<int>>> _activeResponseControllers =
+      <StreamController<List<int>>>{};
+
+  void abortActiveRequests(String reason) {
+    try {
+      if (!_cancelToken.isCancelled) {
+        _cancelToken.cancel(reason);
+      }
+    } catch (_) {}
+    for (final sub in List<StreamSubscription<List<int>>>.from(
+      _activeBodySubscriptions,
+    )) {
+      unawaited(sub.cancel());
+    }
+    _activeBodySubscriptions.clear();
+    for (final controller in List<StreamController<List<int>>>.from(
+      _activeResponseControllers,
+    )) {
+      if (!controller.isClosed) {
+        unawaited(controller.close());
+      }
+    }
+    _activeResponseControllers.clear();
+    try {
+      _dio.close(force: true);
+    } catch (_) {}
+  }
 
   @override
   void close() {
@@ -281,10 +310,14 @@ class DioHttpClient extends http.BaseClient {
         }
       }
 
+      StreamSubscription<List<int>>? bodySubscription;
       controller.onListen = () {
-        body.stream.listen(
+        _activeResponseControllers.add(controller);
+        bodySubscription = body.stream.listen(
           (chunk) {
-            controller.add(chunk);
+            if (!controller.isClosed) {
+              controller.add(chunk);
+            }
             captureResponseLogChunk(chunk);
           },
           onError: (e, st) {
@@ -294,30 +327,48 @@ class DioHttpClient extends http.BaseClient {
                 '[RES $reqId] error=${RequestLogger.escape(RequestLogger.sanitizeBodyForLogging(e.toString()))}',
               );
             }
-            controller.addError(e, st);
-            controller.close();
+            _activeBodySubscriptions.remove(bodySubscription);
+            _activeResponseControllers.remove(controller);
+            if (!controller.isClosed) {
+              controller.addError(e, st);
+              controller.close();
+            }
           },
           onDone: () {
             finishResponseLogBody();
             if (RequestLogger.enabled) {
               RequestLogger.logLine('[RES $reqId] done');
             }
-            controller.close();
+            _activeBodySubscriptions.remove(bodySubscription);
+            _activeResponseControllers.remove(controller);
+            if (!controller.isClosed) {
+              controller.close();
+            }
           },
           cancelOnError: false,
         );
+        _activeBodySubscriptions.add(bodySubscription!);
       };
       controller.onCancel = () {
         // 注意：当 await for 循环被 break 中断时（如工具调用处理），Dart 会取消流订阅，
-        // 触发 onCancel。这里不要做任何清理操作！
+        // 触发 onCancel。正常 break 仍然不清理；只有显式取消 token（如超时）
+        // 后，才取消底层响应流。
         //
         // 原因：
-        // 1. 不能取消 _cancelToken - 会导致后续请求失败
-        // 2. 不能调用 sub?.cancel() - 会影响 Dio 的 HTTP 连接状态，
+        // 1. 不能在普通 onCancel 中取消 _cancelToken - 会导致后续请求失败
+        // 2. 不能在普通 onCancel 中调用 sub?.cancel() - 会影响 Dio 的 HTTP 连接状态，
         //    导致使用同一个 Dio 实例的后续请求失败
         // 3. 不能调用 controller.close() - controller 会在流自然结束时自动关闭
         //
-        // 让旧的流自然结束或被垃圾回收，不要主动干预。
+        // 让旧的流自然结束或被垃圾回收；超时会先取消 token，再走这里清理。
+        if (_cancelToken.isCancelled) {
+          final sub = bodySubscription;
+          if (sub != null) {
+            _activeBodySubscriptions.remove(sub);
+            _activeResponseControllers.remove(controller);
+            return sub.cancel();
+          }
+        }
       };
 
       return http.StreamedResponse(

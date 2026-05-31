@@ -395,6 +395,74 @@ void main() {
       }
     });
   });
+
+  group('DioHttpClient streaming cancellation', () {
+    test('abortActiveRequests terminates an active response stream', () async {
+      final releaseServer = Completer<void>();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+
+      unawaited(
+        server.first.then((request) async {
+          request.response.bufferOutput = false;
+          request.response.headers.contentType = ContentType.text;
+          request.response.write('data: first\n');
+          await request.response.flush();
+          await releaseServer.future;
+          try {
+            await request.response.close();
+          } catch (_) {}
+        }),
+      );
+
+      final client = DioHttpClient();
+      StreamSubscription<List<int>>? sub;
+      try {
+        final request = http.Request(
+          'GET',
+          Uri.parse('http://${server.address.host}:${server.port}/stream'),
+        );
+        final response = await client.send(request);
+        final firstChunk = Completer<List<int>>();
+        final streamTerminated = Completer<void>();
+        sub = response.stream.listen(
+          (chunk) {
+            if (!firstChunk.isCompleted) {
+              firstChunk.complete(chunk);
+            }
+          },
+          onError: (_, __) {
+            if (!streamTerminated.isCompleted) {
+              streamTerminated.complete();
+            }
+          },
+          onDone: () {
+            if (!streamTerminated.isCompleted) {
+              streamTerminated.complete();
+            }
+          },
+        );
+
+        final chunk = await firstChunk.future.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(utf8.decode(chunk), contains('first'));
+
+        client.abortActiveRequests('test_abort');
+
+        await streamTerminated.future.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => throw TimeoutException('client stream did not end'),
+        );
+      } finally {
+        await sub?.cancel();
+        if (!releaseServer.isCompleted) {
+          releaseServer.complete();
+        }
+        client.close();
+        await server.close(force: true);
+      }
+    });
+  });
 }
 
 class _FakePathProviderPlatform extends PathProviderPlatform {
