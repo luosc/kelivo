@@ -587,22 +587,28 @@ Stream<ChatStreamChunk> _sendClaudeStream(
               // Preserve thinking blocks (with signature) for tool-use continuation.
               flushTextBlock();
               if (idx != null) {
+                final initialThinking = (cb['thinking'] ?? '').toString();
+                final initialSignature = (cb['signature'] ?? '').toString();
                 assistantBlocks.add({
                   'type': 'thinking',
-                  'thinking': '',
-                  'signature': '',
+                  'thinking': initialThinking,
+                  'signature': initialSignature,
                 });
                 thinkingIndexToAssistantBlock[idx] = assistantBlocks.length - 1;
-                thinkingText[idx] = StringBuffer();
-                thinkingSig[idx] = StringBuffer();
+                thinkingText[idx] = StringBuffer(initialThinking);
+                thinkingSig[idx] = StringBuffer(initialSignature);
               }
             } else if (cb is Map && (cb['type'] == 'redacted_thinking')) {
               flushTextBlock();
               if (!skipRedactedThinkingBlocks && idx != null) {
-                assistantBlocks.add({'type': 'redacted_thinking', 'data': ''});
+                final initialData = (cb['data'] ?? '').toString();
+                assistantBlocks.add({
+                  'type': 'redacted_thinking',
+                  'data': initialData,
+                });
                 redactedThinkingIndexToAssistantBlock[idx] =
                     assistantBlocks.length - 1;
-                redactedThinkingData[idx] = StringBuffer();
+                redactedThinkingData[idx] = StringBuffer(initialData);
               }
             } else if (cb is Map && (cb['type'] == 'tool_use')) {
               // Flush text block before tool_use
