@@ -134,8 +134,7 @@ class MessageBuilderService {
           if (!hasPendingToolEvent) {
             toolContinuationReasoningContent =
                 _reasoningContentForToolContinuation(m);
-            final calls = <Map<String, dynamic>>[];
-            final toolMessages = <Map<String, dynamic>>[];
+            final replayGroups = <_ToolReplayGroup>[];
 
             for (int i = 0; i < events.length; i++) {
               final e = events[i];
@@ -156,37 +155,62 @@ class MessageBuilderService {
                 argumentsJson = jsonEncode(args);
               } catch (_) {}
 
-              calls.add({
+              final metadata = e['metadata'] is Map
+                  ? (e['metadata'] as Map).cast<String, dynamic>()
+                  : null;
+              final isCompleteClaudeServerTool =
+                  _hasCompleteClaudeServerToolBlocks(metadata, id);
+              if (_looksLikeClaudeServerToolId(id) &&
+                  !isCompleteClaudeServerTool) {
+                // Older builds persisted server search as a client tool but did
+                // not retain the original Anthropic server blocks. Replaying
+                // that synthetic shape changes signed thinking history.
+                continue;
+              }
+              final replayIds = _toolReplayGroupIds(metadata);
+              final lastGroup = replayGroups.isEmpty ? null : replayGroups.last;
+              final belongsToLastGroup =
+                  lastGroup != null &&
+                  (replayIds.isEmpty && lastGroup.toolUseIds.isEmpty ||
+                      replayIds.any(lastGroup.toolUseIds.contains));
+              final group = belongsToLastGroup
+                  ? lastGroup
+                  : (replayGroups..add(_ToolReplayGroup())).last;
+              group.toolUseIds.addAll(replayIds);
+
+              group.calls.add({
                 'id': id,
                 'type': 'function',
                 'function': {'name': name, 'arguments': argumentsJson},
-                if (e['metadata'] is Map)
-                  'metadata': (e['metadata'] as Map).cast<String, dynamic>(),
+                if (metadata != null) 'metadata': metadata,
               });
 
               final c = e['content'];
-              toolMessages.add({
-                'role': 'tool',
-                'name': name,
-                'tool_call_id': id,
-                'content': c.toString(),
-                if (e['metadata'] is Map)
-                  'metadata': (e['metadata'] as Map).cast<String, dynamic>(),
-              });
+              if (!isCompleteClaudeServerTool) {
+                group.toolMessages.add({
+                  'role': 'tool',
+                  'name': name,
+                  'tool_call_id': id,
+                  'content': c.toString(),
+                  if (metadata != null) 'metadata': metadata,
+                });
+              }
             }
 
-            if (calls.isNotEmpty) {
+            for (int i = 0; i < replayGroups.length; i++) {
+              final group = replayGroups[i];
+              if (group.calls.isEmpty) continue;
               final assistantToolMessage = <String, dynamic>{
                 'role': 'assistant',
                 'content': '\n\n',
-                'tool_calls': calls,
+                'tool_calls': group.calls,
               };
-              if (toolContinuationReasoningContent.isNotEmpty) {
+              if (i == 0 && toolContinuationReasoningContent.isNotEmpty) {
                 assistantToolMessage['reasoning_content'] =
                     toolContinuationReasoningContent;
               }
               out.add(assistantToolMessage);
-              out.addAll(toolMessages);
+              out.addAll(group.toolMessages);
             }
           }
         }
@@ -208,6 +232,49 @@ class MessageBuilderService {
     }
 
     return out;
+  }
+
+  Set<String> _toolReplayGroupIds(Map<String, dynamic>? metadata) {
+    final anthropic = metadata?['anthropic'];
+    if (anthropic is! Map) return const <String>{};
+    final blocks = anthropic['assistant_blocks'];
+    if (blocks is! List) return const <String>{};
+    final ids = <String>{};
+    for (final block in blocks.whereType<Map>()) {
+      final type = (block['type'] ?? '').toString();
+      if (type != 'tool_use' && type != 'server_tool_use') continue;
+      final id = (block['id'] ?? '').toString().trim();
+      if (id.isNotEmpty) ids.add(id);
+    }
+    return ids;
+  }
+
+  bool _looksLikeClaudeServerToolId(String id) {
+    return id.startsWith('srvtoolu_');
+  }
+
+  bool _hasCompleteClaudeServerToolBlocks(
+    Map<String, dynamic>? metadata,
+    String id,
+  ) {
+    final anthropic = metadata?['anthropic'];
+    if (anthropic is! Map || anthropic['assistant_blocks_complete'] != true) {
+      return false;
+    }
+    final blocks = anthropic['assistant_blocks'];
+    if (blocks is! List) return false;
+
+    final hasUse = blocks.whereType<Map>().any(
+      (block) =>
+          block['type'] == 'server_tool_use' &&
+          (block['id'] ?? '').toString() == id,
+    );
+    final hasResult = blocks.whereType<Map>().any(
+      (block) =>
+          (block['type'] ?? '').toString().endsWith('_tool_result') &&
+          (block['tool_use_id'] ?? '').toString() == id,
+    );
+    return hasUse && hasResult;
   }
 
   ChatMessage? _latestPersistedMessage(ChatMessage message) {
@@ -993,6 +1060,14 @@ The latest user turn may include one or more audio files.
       return false;
     }
   }
+}
+
+class _ToolReplayGroup {
+  _ToolReplayGroup();
+
+  final Set<String> toolUseIds = <String>{};
+  final List<Map<String, dynamic>> calls = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> toolMessages = <Map<String, dynamic>>[];
 }
 
 class _DocTextCacheEntry {

@@ -336,6 +336,7 @@ void main() {
               'content': '{"result":"ok"}',
               'metadata': {
                 'anthropic': {
+                  'assistant_blocks_complete': true,
                   'assistant_blocks': [
                     {
                       'type': 'thinking',
@@ -395,6 +396,326 @@ void main() {
         toolMessage['metadata']['google']['part']['thoughtSignature'],
         'sig-gemini',
       );
+    });
+
+    test('Claude 连续工具历史按 assistant_blocks 分组重放', () {
+      final service = MessageBuilderService(
+        chatService: _FakeChatService({
+          'a1': [
+            {
+              'id': 'toolu_lookup',
+              'name': 'lookup',
+              'arguments': {'query': 'Kelivo'},
+              'content': '{"result":"ok"}',
+              'metadata': {
+                'anthropic': {
+                  'assistant_blocks_complete': true,
+                  'assistant_blocks': [
+                    {
+                      'type': 'thinking',
+                      'thinking': '先查资料。',
+                      'signature': 'sig-lookup',
+                    },
+                    {
+                      'type': 'tool_use',
+                      'id': 'toolu_lookup',
+                      'name': 'lookup',
+                      'input': {'query': 'Kelivo'},
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              'id': 'toolu_memory',
+              'name': 'create_memory',
+              'arguments': {'content': 'Kelivo ok'},
+              'content': '{"result":"saved"}',
+              'metadata': {
+                'anthropic': {
+                  'assistant_blocks_complete': true,
+                  'assistant_blocks': [
+                    {
+                      'type': 'thinking',
+                      'thinking': '再记录结果。',
+                      'signature': 'sig-memory',
+                    },
+                    {
+                      'type': 'tool_use',
+                      'id': 'toolu_memory',
+                      'name': 'create_memory',
+                      'input': {'content': 'Kelivo ok'},
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+        contextProvider: _FakeBuildContext(),
+      );
+
+      final apiMessages = service.buildApiMessages(
+        messages: [
+          _message(id: 'u1', role: 'user', content: '查 Kelivo 并记录'),
+          _message(id: 'a1', role: 'assistant', content: '已完成。'),
+          _message(id: 'u2', role: 'user', content: '继续'),
+        ],
+        versionSelections: const {},
+        currentConversation: Conversation(title: 'test'),
+        includeToolMessages: true,
+      );
+
+      final roles = apiMessages.map((message) => message['role']).toList();
+      expect(roles, [
+        'user',
+        'assistant',
+        'tool',
+        'assistant',
+        'tool',
+        'assistant',
+        'user',
+      ]);
+
+      final firstToolCalls = (apiMessages[1]['tool_calls'] as List).cast<Map>();
+      final secondToolCalls = (apiMessages[3]['tool_calls'] as List)
+          .cast<Map>();
+      expect(firstToolCalls.single['id'], 'toolu_lookup');
+      expect(secondToolCalls.single['id'], 'toolu_memory');
+      expect(apiMessages[2]['tool_call_id'], 'toolu_lookup');
+      expect(apiMessages[4]['tool_call_id'], 'toolu_memory');
+    });
+
+    test('Claude server tool 历史保留原始轮次且不生成 tool result', () {
+      Map<String, dynamic> serverMetadata({
+        required String id,
+        required String query,
+        required String signature,
+      }) {
+        return {
+          'anthropic': {
+            'assistant_blocks_complete': true,
+            'assistant_blocks': [
+              {
+                'type': 'thinking',
+                'thinking': '搜索 $query。',
+                'signature': signature,
+              },
+              {
+                'type': 'server_tool_use',
+                'id': id,
+                'name': 'web_search',
+                'input': {'query': query},
+              },
+              {
+                'type': 'web_search_tool_result',
+                'tool_use_id': id,
+                'content': [
+                  {
+                    'type': 'web_search_result',
+                    'title': '$query result',
+                    'url': 'https://example.com/$query',
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+
+      final service = MessageBuilderService(
+        chatService: _FakeChatService({
+          'a1': [
+            {
+              'id': 'srvtoolu_1',
+              'name': 'search_web',
+              'arguments': {'query': 'Kelivo'},
+              'content': '{"items":[]}',
+              'metadata': serverMetadata(
+                id: 'srvtoolu_1',
+                query: 'Kelivo',
+                signature: 'sig-server-1',
+              ),
+            },
+            {
+              'id': 'srvtoolu_2',
+              'name': 'search_web',
+              'arguments': {'query': 'Claude'},
+              'content': '{"items":[]}',
+              'metadata': serverMetadata(
+                id: 'srvtoolu_2',
+                query: 'Claude',
+                signature: 'sig-server-2',
+              ),
+            },
+          ],
+        }),
+        contextProvider: _FakeBuildContext(),
+      );
+
+      final apiMessages = service.buildApiMessages(
+        messages: [
+          _message(id: 'u1', role: 'user', content: '搜索 Kelivo 和 Claude'),
+          _message(id: 'a1', role: 'assistant', content: '搜索完成。'),
+          _message(id: 'u2', role: 'user', content: '继续'),
+        ],
+        versionSelections: const {},
+        currentConversation: Conversation(title: 'test'),
+        includeToolMessages: true,
+      );
+
+      expect(
+        apiMessages.where((message) => message['role'] == 'tool'),
+        isEmpty,
+      );
+      final replayed = apiMessages
+          .where((message) => message['tool_calls'] is List)
+          .toList();
+      expect(replayed, hasLength(2));
+      expect((replayed[0]['tool_calls'] as List).single['id'], 'srvtoolu_1');
+      expect((replayed[1]['tool_calls'] as List).single['id'], 'srvtoolu_2');
+    });
+
+    test('Claude 同轮 server tool 累积 metadata 合并为一个重放组', () {
+      const firstUse = {
+        'type': 'server_tool_use',
+        'id': 'srvtoolu_1',
+        'name': 'web_search',
+        'input': {'query': 'Kelivo'},
+      };
+      const firstResult = {
+        'type': 'web_search_tool_result',
+        'tool_use_id': 'srvtoolu_1',
+        'content': <Map<String, dynamic>>[],
+      };
+      const thinking = {
+        'type': 'thinking',
+        'thinking': '搜索两个主题。',
+        'signature': 'sig-server-round',
+      };
+
+      final service = MessageBuilderService(
+        chatService: _FakeChatService({
+          'a1': [
+            {
+              'id': 'srvtoolu_1',
+              'name': 'search_web',
+              'arguments': {'query': 'Kelivo'},
+              'content': '{"items":[]}',
+              'metadata': {
+                'anthropic': {
+                  'assistant_blocks_complete': true,
+                  'assistant_blocks': [thinking, firstUse, firstResult],
+                },
+              },
+            },
+            {
+              'id': 'srvtoolu_2',
+              'name': 'search_web',
+              'arguments': {'query': 'Claude'},
+              'content': '{"items":[]}',
+              'metadata': {
+                'anthropic': {
+                  'assistant_blocks_complete': true,
+                  'assistant_blocks': [
+                    thinking,
+                    firstUse,
+                    firstResult,
+                    {
+                      'type': 'server_tool_use',
+                      'id': 'srvtoolu_2',
+                      'name': 'web_search',
+                      'input': {'query': 'Claude'},
+                    },
+                    {
+                      'type': 'web_search_tool_result',
+                      'tool_use_id': 'srvtoolu_2',
+                      'content': <Map<String, dynamic>>[],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+        contextProvider: _FakeBuildContext(),
+      );
+
+      final apiMessages = service.buildApiMessages(
+        messages: [
+          _message(id: 'u1', role: 'user', content: '搜索两个主题'),
+          _message(id: 'a1', role: 'assistant', content: '完成。'),
+        ],
+        versionSelections: const {},
+        currentConversation: Conversation(title: 'test'),
+        includeToolMessages: true,
+      );
+
+      final replayed = apiMessages
+          .where((message) => message['tool_calls'] is List)
+          .toList();
+      expect(replayed, hasLength(1));
+      expect(
+        (replayed.single['tool_calls'] as List).map((call) => call['id']),
+        ['srvtoolu_1', 'srvtoolu_2'],
+      );
+      expect(
+        apiMessages.where((message) => message['role'] == 'tool'),
+        isEmpty,
+      );
+    });
+
+    test('Claude 旧 server tool 历史缺少原始 blocks 时不再伪造重放', () {
+      final service = MessageBuilderService(
+        chatService: _FakeChatService({
+          'a1': [
+            {
+              'id': 'srvtoolu_legacy',
+              'name': 'search_web',
+              'arguments': {'query': 'Kelivo'},
+              'content': '{"items":[]}',
+              'metadata': {
+                'anthropic': {
+                  'assistant_blocks_complete': true,
+                  'assistant_blocks': [
+                    {
+                      'type': 'thinking',
+                      'thinking': '旧版本只保存了 thinking。',
+                      'signature': 'sig-legacy-server',
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+        contextProvider: _FakeBuildContext(),
+      );
+
+      final apiMessages = service.buildApiMessages(
+        messages: [
+          _message(id: 'u1', role: 'user', content: '搜索 Kelivo'),
+          _message(id: 'a1', role: 'assistant', content: '这是最终回答。'),
+          _message(id: 'u2', role: 'user', content: '继续'),
+        ],
+        versionSelections: const {},
+        currentConversation: Conversation(title: 'test'),
+        includeToolMessages: true,
+      );
+
+      expect(
+        apiMessages.where((message) => message['tool_calls'] is List),
+        isEmpty,
+      );
+      expect(
+        apiMessages.where((message) => message['role'] == 'tool'),
+        isEmpty,
+      );
+      expect(apiMessages.map((message) => message['content']).toList(), [
+        '搜索 Kelivo',
+        '这是最终回答。',
+        '继续',
+      ]);
     });
 
     test('未完成的工具占位事件不会被重建为 API tool call', () {

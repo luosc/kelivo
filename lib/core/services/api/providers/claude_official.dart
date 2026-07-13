@@ -1,5 +1,38 @@
 part of '../chat_api_service.dart';
 
+dynamic _cloneClaudeJsonValue(dynamic value) {
+  if (value is Map) {
+    return value.map((key, entry) {
+      return MapEntry(key.toString(), _cloneClaudeJsonValue(entry));
+    });
+  }
+  if (value is List) {
+    return value.map(_cloneClaudeJsonValue).toList();
+  }
+  return value;
+}
+
+Map<String, dynamic> _cloneClaudeJsonMap(Map value) {
+  return _cloneClaudeJsonValue(value) as Map<String, dynamic>;
+}
+
+List<Map<String, dynamic>> _cloneClaudeAssistantBlocks(
+  List<Map<String, dynamic>> blocks,
+) {
+  return blocks.map(_cloneClaudeJsonMap).toList();
+}
+
+Map<String, dynamic> _completeClaudeAssistantBlocksMetadata(
+  List<Map<String, dynamic>> assistantBlocks,
+) {
+  return {
+    'anthropic': {
+      'assistant_blocks_complete': true,
+      'assistant_blocks': _cloneClaudeAssistantBlocks(assistantBlocks),
+    },
+  };
+}
+
 int _readClaudeUsageInt(dynamic value) {
   if (value is num) return value.toInt();
   if (value is String) return int.tryParse(value) ?? 0;
@@ -99,10 +132,49 @@ Stream<ChatStreamChunk> _sendClaudeStream(
 
   Set<String> toolUseIdsInBlocks(List<Map<String, dynamic>> blocks) {
     return blocks
-        .where((block) => block['type'] == 'tool_use')
+        .where((block) {
+          final type = block['type'];
+          return type == 'tool_use' || type == 'server_tool_use';
+        })
         .map((block) => (block['id'] ?? '').toString())
         .where((id) => id.isNotEmpty)
         .toSet();
+  }
+
+  bool hasCompleteServerToolBlocks(Map message, String id) {
+    final meta = message['metadata'];
+    if (meta is! Map) return false;
+    final anthropic = meta['anthropic'];
+    if (anthropic is! Map || anthropic['assistant_blocks_complete'] != true) {
+      return false;
+    }
+    final blocks = anthropic['assistant_blocks'];
+    if (blocks is! List) return false;
+    final hasUse = blocks.whereType<Map>().any(
+      (block) =>
+          block['type'] == 'server_tool_use' &&
+          (block['id'] ?? '').toString() == id,
+    );
+    final hasResult = blocks.whereType<Map>().any(
+      (block) =>
+          (block['type'] ?? '').toString().endsWith('_tool_result') &&
+          (block['tool_use_id'] ?? '').toString() == id,
+    );
+    return hasUse && hasResult;
+  }
+
+  bool isLegacyServerToolCallGroup(List toolCalls) {
+    final mappedCalls = toolCalls.whereType<Map>().toList();
+    final serverCalls = mappedCalls.where((toolCall) {
+      return (toolCall['id'] ?? '').toString().startsWith('srvtoolu_');
+    }).toList();
+    if (serverCalls.isEmpty || serverCalls.length != mappedCalls.length) {
+      return false;
+    }
+    return serverCalls.any((toolCall) {
+      final id = (toolCall['id'] ?? '').toString();
+      return !hasCompleteServerToolBlocks(toolCall, id);
+    });
   }
 
   Map<String, dynamic>? assistantBlockForClaudeRequest(Map block) {
@@ -110,7 +182,7 @@ Stream<ChatStreamChunk> _sendClaudeStream(
     if (skipRedactedThinkingBlocks && type == 'redacted_thinking') {
       return null;
     }
-    return block.map((key, value) => MapEntry(key.toString(), value));
+    return _cloneClaudeJsonMap(block);
   }
 
   List<Map<String, dynamic>> assistantBlocksForClaudeRequest(
@@ -121,6 +193,19 @@ Stream<ChatStreamChunk> _sendClaudeStream(
         if (assistantBlockForClaudeRequest(block) case final sanitized?)
           sanitized,
     ];
+  }
+
+  bool hasUntrustedThinkingBlocks(List<Map<String, dynamic>> blocks) {
+    for (final block in blocks) {
+      final type = (block['type'] ?? '').toString();
+      if (type == 'thinking') {
+        if (!block.containsKey('thinking')) return true;
+        if ((block['signature'] ?? '').toString().isEmpty) return true;
+      } else if (type == 'redacted_thinking') {
+        if ((block['data'] ?? '').toString().isEmpty) return true;
+      }
+    }
+    return false;
   }
 
   List<Map<String, dynamic>>? anthropicBlocksFromToolCallMetadata(
@@ -145,6 +230,15 @@ Stream<ChatStreamChunk> _sendClaudeStream(
       final candidate = assistantBlocksForClaudeRequest(
         blocks.whereType<Map>(),
       );
+      final markedComplete = anthropic['assistant_blocks_complete'] == true;
+      final hasThinkingBlock = candidate.any((block) {
+        final type = (block['type'] ?? '').toString();
+        return type == 'thinking' || type == 'redacted_thinking';
+      });
+      if (hasUntrustedThinkingBlocks(candidate)) continue;
+      if (hasThinkingBlock && !markedComplete) {
+        continue;
+      }
       final matchCount = toolUseIdsInBlocks(
         candidate,
       ).where(expectedIds.contains).length;
@@ -181,6 +275,9 @@ Stream<ChatStreamChunk> _sendClaudeStream(
     final role = (m['role'] ?? 'user').toString();
     if (role == 'tool') {
       final id = (m['tool_call_id'] ?? '').toString();
+      if (id.startsWith('srvtoolu_') || hasCompleteServerToolBlocks(m, id)) {
+        continue;
+      }
       if (id.isNotEmpty) {
         pendingToolResults.add({
           'type': 'tool_result',
@@ -194,6 +291,7 @@ Stream<ChatStreamChunk> _sendClaudeStream(
 
     if (role == 'assistant' && m['tool_calls'] is List) {
       final toolCalls = m['tool_calls'] as List;
+      if (isLegacyServerToolCallGroup(toolCalls)) continue;
       final blocks =
           anthropicBlocksFromToolCallMetadata(toolCalls) ??
           <Map<String, dynamic>>[];
@@ -457,9 +555,7 @@ Stream<ChatStreamChunk> _sendClaudeStream(
               id: e.key,
               name: (e.value['name'] ?? '').toString(),
               arguments: (e.value['args'] as Map<String, dynamic>),
-              metadata: {
-                'anthropic': {'assistant_blocks': assistantBlocks},
-              },
+              metadata: _completeClaudeAssistantBlocksMetadata(assistantBlocks),
             ),
           );
         }
@@ -487,9 +583,7 @@ Stream<ChatStreamChunk> _sendClaudeStream(
               name: name,
               arguments: args,
               content: res,
-              metadata: {
-                'anthropic': {'assistant_blocks': assistantBlocks},
-              },
+              metadata: _completeClaudeAssistantBlocksMetadata(assistantBlocks),
             ),
           );
         }
@@ -560,6 +654,9 @@ Stream<ChatStreamChunk> _sendClaudeStream(
     final Map<String, String> srvArgsStr = <String, String>{};
     final Map<String, Map<String, dynamic>> srvArgs =
         <String, Map<String, dynamic>>{};
+    final Map<String, Map<String, dynamic>> srvInitialArgs =
+        <String, Map<String, dynamic>>{};
+    final Map<String, int> srvIdToAssistantBlock = <String, int>{};
 
     bool messageStopped = false;
 
@@ -636,20 +733,24 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                       id: id,
                       name: name,
                       arguments: const <String, dynamic>{},
-                      metadata: {
-                        'anthropic': {'assistant_blocks': assistantBlocks},
-                      },
                     ),
                   ],
                 );
               }
             } else if (cb is Map && (cb['type'] == 'server_tool_use')) {
+              flushTextBlock();
               final id = (cb['id'] ?? '').toString();
               final name = (cb['name'] ?? '').toString();
               final idx2 = idx ?? -1;
               if (id.isNotEmpty && idx2 >= 0) {
                 srvIndexToId[idx2] = id;
                 srvArgsStr[id] = '';
+                final initialInput = cb['input'] is Map
+                    ? (cb['input'] as Map).cast<String, dynamic>()
+                    : <String, dynamic>{};
+                srvInitialArgs[id] = initialInput;
+                assistantBlocks.add(_cloneClaudeJsonMap(cb));
+                srvIdToAssistantBlock[id] = assistantBlocks.length - 1;
               }
               // Emit placeholder for server tool to show card (e.g., built-in web_search)
               if (id.isNotEmpty && name == 'web_search') {
@@ -663,14 +764,13 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                       id: id,
                       name: 'search_web',
                       arguments: const <String, dynamic>{},
-                      metadata: {
-                        'anthropic': {'assistant_blocks': assistantBlocks},
-                      },
                     ),
                   ],
                 );
               }
             } else if (cb is Map && (cb['type'] == 'web_search_tool_result')) {
+              flushTextBlock();
+              assistantBlocks.add(_cloneClaudeJsonMap(cb));
               // Emit simplified search results to UI
               final toolUseId = (cb['tool_use_id'] ?? '').toString();
               final contentBlock = cb['content'];
@@ -710,9 +810,9 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                     name: 'search_web',
                     arguments: args,
                     content: payload,
-                    metadata: {
-                      'anthropic': {'assistant_blocks': assistantBlocks},
-                    },
+                    metadata: _completeClaudeAssistantBlocksMetadata(
+                      assistantBlocks,
+                    ),
                   ),
                 ],
               );
@@ -871,9 +971,9 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                       name: name,
                       arguments: args,
                       content: res,
-                      metadata: {
-                        'anthropic': {'assistant_blocks': assistantBlocks},
-                      },
+                      metadata: _completeClaudeAssistantBlocksMetadata(
+                        assistantBlocks,
+                      ),
                     ),
                   ],
                   usage: usage,
@@ -884,13 +984,26 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                 final sid = srvIndexToId[idx]!;
                 Map<String, dynamic> args;
                 try {
-                  args = jsonDecode(
-                    srvArgsStr[sid] ?? '{}',
-                  ).cast<String, dynamic>();
+                  final rawArgs = srvArgsStr[sid] ?? '';
+                  args = rawArgs.isEmpty
+                      ? Map<String, dynamic>.from(
+                          srvInitialArgs[sid] ?? const <String, dynamic>{},
+                        )
+                      : jsonDecode(rawArgs).cast<String, dynamic>();
                 } catch (_) {
-                  args = <String, dynamic>{};
+                  args = Map<String, dynamic>.from(
+                    srvInitialArgs[sid] ?? const <String, dynamic>{},
+                  );
                 }
                 srvArgs[sid] = args;
+                final blockPos = srvIdToAssistantBlock[sid];
+                if (blockPos != null) {
+                  final current = assistantBlocks[blockPos];
+                  assistantBlocks[blockPos] = {
+                    ...current,
+                    'input': _cloneClaudeJsonMap(args),
+                  };
+                }
                 yield ChatStreamChunk(
                   content: '',
                   isDone: false,
@@ -901,9 +1014,9 @@ Stream<ChatStreamChunk> _sendClaudeStream(
                       id: sid,
                       name: 'search_web',
                       arguments: args,
-                      metadata: {
-                        'anthropic': {'assistant_blocks': assistantBlocks},
-                      },
+                      metadata: _completeClaudeAssistantBlocksMetadata(
+                        assistantBlocks,
+                      ),
                     ),
                   ],
                 );

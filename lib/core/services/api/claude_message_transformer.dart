@@ -23,6 +23,10 @@ class ClaudeMessageTransformer {
       final role = (message['role'] ?? 'user').toString();
       if (role == 'tool') {
         final id = (message['tool_call_id'] ?? '').toString();
+        if (id.startsWith('srvtoolu_') ||
+            _hasCompleteServerToolBlocks(message, id)) {
+          continue;
+        }
         if (id.isNotEmpty) {
           pendingToolResults.add({
             'type': 'tool_result',
@@ -36,6 +40,7 @@ class ClaudeMessageTransformer {
       flushPendingToolResults();
       if (role == 'assistant' && message['tool_calls'] is List) {
         final toolCalls = message['tool_calls'] as List;
+        if (_isLegacyServerToolCallGroup(toolCalls)) continue;
         final blocks =
             _anthropicBlocksFromToolCallMetadata(toolCalls) ??
             <Map<String, dynamic>>[];
@@ -83,10 +88,49 @@ class ClaudeMessageTransformer {
 
   static Set<String> _toolUseIdsInBlocks(List<Map<String, dynamic>> blocks) {
     return blocks
-        .where((block) => block['type'] == 'tool_use')
+        .where((block) {
+          final type = block['type'];
+          return type == 'tool_use' || type == 'server_tool_use';
+        })
         .map((block) => (block['id'] ?? '').toString())
         .where((id) => id.isNotEmpty)
         .toSet();
+  }
+
+  static bool _hasCompleteServerToolBlocks(Map message, String id) {
+    final meta = message['metadata'];
+    if (meta is! Map) return false;
+    final anthropic = meta['anthropic'];
+    if (anthropic is! Map || anthropic['assistant_blocks_complete'] != true) {
+      return false;
+    }
+    final blocks = anthropic['assistant_blocks'];
+    if (blocks is! List) return false;
+    final hasUse = blocks.whereType<Map>().any(
+      (block) =>
+          block['type'] == 'server_tool_use' &&
+          (block['id'] ?? '').toString() == id,
+    );
+    final hasResult = blocks.whereType<Map>().any(
+      (block) =>
+          (block['type'] ?? '').toString().endsWith('_tool_result') &&
+          (block['tool_use_id'] ?? '').toString() == id,
+    );
+    return hasUse && hasResult;
+  }
+
+  static bool _isLegacyServerToolCallGroup(List toolCalls) {
+    final mappedCalls = toolCalls.whereType<Map>().toList();
+    final serverCalls = mappedCalls.where((toolCall) {
+      return (toolCall['id'] ?? '').toString().startsWith('srvtoolu_');
+    }).toList();
+    if (serverCalls.isEmpty || serverCalls.length != mappedCalls.length) {
+      return false;
+    }
+    return serverCalls.any((toolCall) {
+      final id = (toolCall['id'] ?? '').toString();
+      return !_hasCompleteServerToolBlocks(toolCall, id);
+    });
   }
 
   static List<Map<String, dynamic>>? _anthropicBlocksFromToolCallMetadata(
@@ -112,6 +156,15 @@ class ClaudeMessageTransformer {
           .whereType<Map>()
           .map((block) => block.cast<String, dynamic>())
           .toList();
+      final markedComplete = anthropic['assistant_blocks_complete'] == true;
+      final hasThinkingBlock = candidate.any((block) {
+        final type = (block['type'] ?? '').toString();
+        return type == 'thinking' || type == 'redacted_thinking';
+      });
+      if (_hasUntrustedThinkingBlocks(candidate)) continue;
+      if (hasThinkingBlock && !markedComplete) {
+        continue;
+      }
       final matchCount = _toolUseIdsInBlocks(
         candidate,
       ).where(expectedIds.contains).length;
@@ -140,5 +193,18 @@ class ClaudeMessageTransformer {
       presentIds.add(id);
     }
     return completed;
+  }
+
+  static bool _hasUntrustedThinkingBlocks(List<Map<String, dynamic>> blocks) {
+    for (final block in blocks) {
+      final type = (block['type'] ?? '').toString();
+      if (type == 'thinking') {
+        if (!block.containsKey('thinking')) return true;
+        if ((block['signature'] ?? '').toString().isEmpty) return true;
+      } else if (type == 'redacted_thinking') {
+        if ((block['data'] ?? '').toString().isEmpty) return true;
+      }
+    }
+    return false;
   }
 }

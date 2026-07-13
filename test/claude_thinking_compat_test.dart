@@ -783,6 +783,20 @@ data: {"type":"message_stop"}
         expect(chunks.where((chunk) => chunk.content == 'done'), hasLength(1));
         expect(chunks.last.isDone, isTrue);
         expect(requestBodies, hasLength(1));
+
+        final serverResult = chunks.firstWhere(
+          (chunk) => (chunk.toolResults ?? const []).isNotEmpty,
+        );
+        final anthropic =
+            serverResult.toolResults!.single.metadata!['anthropic'] as Map;
+        final blocks = (anthropic['assistant_blocks'] as List).cast<Map>();
+        expect(blocks.map((block) => block['type']).toList(), [
+          'server_tool_use',
+          'web_search_tool_result',
+        ]);
+        expect(blocks[0]['id'], 'srv_1');
+        expect(blocks[0]['input'], {'query': 'kelivo'});
+        expect(blocks[1]['tool_use_id'], 'srv_1');
       },
     );
 
@@ -873,6 +887,7 @@ data: {"type":"message_stop"}
                     },
                     'metadata': {
                       'anthropic': {
+                        'assistant_blocks_complete': true,
                         'assistant_blocks': [
                           {
                             'type': 'thinking',
@@ -985,6 +1000,69 @@ data: {"type":"message_stop"}
       );
     });
 
+    test('Claude tool history normalizer preserves server tool blocks', () {
+      final normalized = ClaudeMessageTransformer.normalizeToolHistoryMessages(
+        const [
+          {
+            'role': 'assistant',
+            'content': '\n\n',
+            'tool_calls': [
+              {
+                'id': 'srvtoolu_1',
+                'type': 'function',
+                'function': {
+                  'name': 'search_web',
+                  'arguments': '{"query":"Kelivo"}',
+                },
+                'metadata': {
+                  'anthropic': {
+                    'assistant_blocks_complete': true,
+                    'assistant_blocks': [
+                      {
+                        'type': 'thinking',
+                        'thinking': '需要搜索。',
+                        'signature': 'sig-server-history',
+                      },
+                      {
+                        'type': 'server_tool_use',
+                        'id': 'srvtoolu_1',
+                        'name': 'web_search',
+                        'input': {'query': 'Kelivo'},
+                      },
+                      {
+                        'type': 'web_search_tool_result',
+                        'tool_use_id': 'srvtoolu_1',
+                        'content': [
+                          {
+                            'type': 'web_search_result',
+                            'title': 'Kelivo',
+                            'url': 'https://example.com/kelivo',
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          {'role': 'user', 'content': '继续'},
+        ],
+      );
+
+      final assistantContent = (normalized.first['content'] as List)
+          .cast<Map>();
+      expect(assistantContent.map((block) => block['type']).toList(), [
+        'thinking',
+        'server_tool_use',
+        'web_search_tool_result',
+      ]);
+      expect(
+        assistantContent.where((block) => block['type'] == 'tool_use'),
+        isEmpty,
+      );
+    });
+
     test('Claude tool history normalizer tolerates invalid arguments JSON', () {
       final normalized = ClaudeMessageTransformer.normalizeToolHistoryMessages(
         const [
@@ -1059,6 +1137,7 @@ data: {"type":"message_stop"}
                 },
                 'metadata': {
                   'anthropic': {
+                    'assistant_blocks_complete': true,
                     'assistant_blocks': [
                       {
                         'type': 'thinking',
@@ -1349,6 +1428,248 @@ data: {"type":"message_stop"}
     );
 
     test(
+      'official Claude tool placeholder omits provisional assistant metadata',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() async {
+          await server.close(force: true);
+        });
+
+        var requestCount = 0;
+        server.listen((request) async {
+          requestCount += 1;
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = HttpStatus.ok;
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+
+          if (requestCount == 1) {
+            request.response.write('''
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-4-6","stop_reason":null}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"需要查。"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-stream-final"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"Kelivo\\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":1,"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+''');
+          } else {
+            request.response.write('''
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","content":[],"model":"claude-opus-4-6","stop_reason":null}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+''');
+          }
+          await request.response.close();
+        });
+
+        final chunks = await ChatApiService.sendMessageStream(
+          config: _claudeConfig(
+            'http://${server.address.address}:${server.port}',
+          ),
+          modelId: 'claude-opus-4-6',
+          messages: const [
+            {'role': 'user', 'content': '查一下 Kelivo'},
+          ],
+          tools: const [
+            {
+              'type': 'function',
+              'function': {
+                'name': 'lookup',
+                'parameters': {
+                  'type': 'object',
+                  'properties': {
+                    'query': {'type': 'string'},
+                  },
+                },
+              },
+            },
+          ],
+          onToolCall: (name, args, {toolCallId}) async => '{"result":"ok"}',
+        ).toList();
+
+        final placeholder = chunks.firstWhere(
+          (chunk) => (chunk.toolCalls ?? const []).isNotEmpty,
+        );
+        final result = chunks.firstWhere(
+          (chunk) => (chunk.toolResults ?? const []).isNotEmpty,
+        );
+
+        expect(placeholder.toolCalls!.single.metadata, isNull);
+
+        final metadata = result.toolResults!.single.metadata!;
+        final anthropic = metadata['anthropic'] as Map;
+        expect(anthropic['assistant_blocks_complete'], isTrue);
+
+        final blocks = (anthropic['assistant_blocks'] as List).cast<Map>();
+        expect(blocks[0]['type'], 'thinking');
+        expect(blocks[0]['thinking'], '需要查。');
+        expect(blocks[0]['signature'], 'sig-stream-final');
+        expect(blocks[1]['type'], 'tool_use');
+        expect(blocks[1]['input'], {'query': 'Kelivo'});
+      },
+    );
+
+    test(
+      'history replay ignores markerless redacted thinking metadata',
+      () async {
+        final body = await _captureClaudeRequestBody(
+          modelId: 'claude-opus-4-6',
+          thinkingBudget: 16000,
+          messages: const [
+            {'role': 'user', 'content': '查一下 Kelivo'},
+            {
+              'role': 'assistant',
+              'content': '\n\n',
+              'tool_calls': [
+                {
+                  'id': 'toolu_1',
+                  'type': 'function',
+                  'function': {
+                    'name': 'lookup',
+                    'arguments': '{"query":"Kelivo"}',
+                  },
+                  'metadata': {
+                    'anthropic': {
+                      'assistant_blocks': [
+                        {
+                          'type': 'redacted_thinking',
+                          'data': 'markerless-stale-redacted-data',
+                        },
+                        {
+                          'type': 'tool_use',
+                          'id': 'toolu_1',
+                          'name': 'lookup',
+                          'input': {'query': 'Kelivo'},
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'toolu_1',
+              'name': 'lookup',
+              'content': '{"result":"ok"}',
+            },
+            {'role': 'user', 'content': '继续'},
+          ],
+        );
+
+        final messages = (body['messages'] as List).cast<Map>();
+        final assistantContent = (messages[1]['content'] as List).cast<Map>();
+
+        expect(
+          assistantContent.any((block) => block['type'] == 'redacted_thinking'),
+          isFalse,
+        );
+        expect(assistantContent.single['type'], 'tool_use');
+        expect(assistantContent.single['id'], 'toolu_1');
+      },
+    );
+
+    test('history replay ignores markerless thinking metadata', () async {
+      final body = await _captureClaudeRequestBody(
+        modelId: 'claude-opus-4-6',
+        thinkingBudget: 16000,
+        messages: const [
+          {'role': 'user', 'content': '查一下 Kelivo'},
+          {
+            'role': 'assistant',
+            'content': '\n\n',
+            'tool_calls': [
+              {
+                'id': 'toolu_1',
+                'type': 'function',
+                'function': {
+                  'name': 'lookup',
+                  'arguments': '{"query":"Kelivo"}',
+                },
+                'metadata': {
+                  'anthropic': {
+                    'assistant_blocks': [
+                      {
+                        'type': 'thinking',
+                        'thinking': '旧版本保存的 thinking。',
+                        'signature': 'sig-markerless-stale',
+                      },
+                      {
+                        'type': 'tool_use',
+                        'id': 'toolu_1',
+                        'name': 'lookup',
+                        'input': {'query': 'Kelivo'},
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          {
+            'role': 'tool',
+            'tool_call_id': 'toolu_1',
+            'name': 'lookup',
+            'content': '{"result":"ok"}',
+          },
+          {'role': 'user', 'content': '继续'},
+        ],
+      );
+
+      final messages = (body['messages'] as List).cast<Map>();
+      final assistantContent = (messages[1]['content'] as List).cast<Map>();
+
+      expect(
+        assistantContent.any((block) => block['type'] == 'thinking'),
+        isFalse,
+      );
+      expect(assistantContent.single['type'], 'tool_use');
+      expect(assistantContent.single['id'], 'toolu_1');
+    });
+
+    test(
       'completed memory tool turn remains valid when followed by user text',
       () async {
         final body = await _captureClaudeRequestBody(
@@ -1369,6 +1690,7 @@ data: {"type":"message_stop"}
                   },
                   'metadata': {
                     'anthropic': {
+                      'assistant_blocks_complete': true,
                       'assistant_blocks': [
                         {
                           'type': 'thinking',
